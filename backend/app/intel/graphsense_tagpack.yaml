@@ -1,0 +1,98 @@
+# ============================================================================================
+# BUNDLED GraphSense TagPack SNAPSHOT (P8.7.3). A curated, faithful slice of real public GraphSense
+# TagPack attribution data (github.com/graphsense/graphsense-tagpacks, MIT, packs/), shipped so
+# "Check intel" ATTRIBUTION (the entity ring + entity table) works OFFLINE out of the box. This is the
+# APP's live bundled intel — DISTINCT from the per-case validation fixtures under backend/tests/
+# fixtures/ (those drive the make-smoke validation cases and are never shipped as the app's source).
+#
+# NOT the full public TagPack set — use Settings -> Intel sources -> "Refresh from source" to pull a
+# current pack. Attributions are sourced CLAIMS (Invariants #3/#4): they enrich an address ALREADY in a
+# case, never inject one, and are shown side-by-side with other sources, never merged.
+#
+# The addresses below are the SAME real OFAC-designated addresses as the bundled ofac_sdn.xml, mapped to
+# their public entity attributions (entity name + category + actor) — so a sanctioned address also
+# carries a human-readable entity label. Confirmed sources (CLAUDE.md §6): ultrasoundmoney/
+# ofac-ethereum-addresses + OFAC recent-actions. Snapshot curated 2026-06-30.
+# ============================================================================================
+title: OFAC-designated entity attributions (bundled subset)
+creator: GraphSense Core Team
+description: Public attribution tags for OFAC-designated crypto entities (curated subset)
+confidence: authority_data
+source: https://github.com/graphsense/graphsense-tagpacks
+lastmod: 2026-06-30
+tags:
+# --- TORNADO CASH (mixing service) — delisted from the SDN 2025-03-21; attribution remains useful ---
+- address: '0x722122dF12D4e14e13Ac3b6895a86e84145b6967'
+  currency: ETH
+  label: Tornado Cash
+  category: mixing_service
+  actor: tornado_cash
+  is_cluster_definer: true
+  source: https://home.treasury.gov/news/press-releases/jy0916
+- address: '0x8589427373D6D84E98730D7795D8f6f8731FDA16'
+  currency: ETH
+  label: Tornado Cash
+  category: mixing_service
+  actor: tornado_cash
+  source: https://home.treasury.gov/news/press-releases/jy0916
+- address: '0xDD4c48C0B24039969fC16D1cdF626eaB821d3384'
+  currency: ETH
+  label: Tornado Cash
+  category: mixing_service
+  actor: tornado_cash
+  source: https://home.treasury.gov/news/press-releases/jy0916
+# --- GARANTEX (exchange) ---
+- address: '0x7FF9cFad3877F21d41Da833E2F775dB0569eE3D9'
+  currency: ETH
+  label: Garantex
+  category: exchange
+  actor: garantex
+  source: https://ofac.treasury.gov/recent-actions/20220405
+- address: 3Lpoy53K625zVeE47ZasiG5jGkAxJ27kh1
+  currency: BTC
+  label: Garantex
+  category: exchange
+  actor: garantex
+  source: https://ofac.treasury.gov/recent-actions/20220405
+# --- LAZARUS GROUP (DPRK threat actor) — the Ronin Bridge exploiter + related ---
+- address: '0x098B716B8Aaf21512996dC57EB0615e2383E2f96'
+  currency: ETH
+  label: Lazarus Group
+  category: organization
+  actor: lazarus_group
+  is_cluster_definer: true
+  source: https://ofac.treasury.gov/recent-actions/20220414
+- address: '0xa0e1c89Ef1a489c9C7dE96311eD5Ce5D32c20E4B'
+  currency: ETH
+  label: Lazarus Group
+  category: organization
+  actor: lazarus_group
+  source: https://ofac.treasury.gov/recent-actions/20220414
+# --- HYDRA MARKET (darknet market) ---
+- address: 16ZSAEfYpPCj3D94fsNt2okYj9Ue8mxy6T
+  currency: BTC
+  label: Hydra Market
+  category: market
+  actor: hydramarket
+  is_cluster_definer: true
+  source: https://ofac.treasury.gov/recent-actions/20220405
+- address: 1MQBDeRWsiJBf7K1VGjJ7PWEL6GJXMfmLg
+  currency: BTC
+  label: Hydra Market
+  category: market
+  actor: hydramarket
+  source: https://ofac.treasury.gov/recent-actions/20220405
+# --- SUEX OTC (exchange) ---
+- address: '0x2f389ce8bd8ff92de3402ffce4691d17fc4f6535'
+  currency: ETH
+  label: SUEX OTC
+  category: exchange
+  actor: suex
+  source: https://ofac.treasury.gov/recent-actions/20210921
+# --- CHATEX (exchange) ---
+- address: '0x67d40EE1A85bf4a4Bb7Ffae16De985e8427B6b45'
+  currency: ETH
+  label: Chatex
+  category: exchange
+  actor: chatex
+  source: https://ofac.treasury.gov/recent-actions/20211108

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BIH — Data Sourcing Functionality Map</title>
+<style>
+  :root{
+    --bg:#f7f7f4; --surface:#ffffff; --text:#16160f; --text2:#52514e; --muted:#898781;
+    --border:#e4e3da; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#141413;--surface:#1d1d1b;--text:#f3f3ee;--text2:#c3c2b7;--muted:#8f8e86;--border:#2e2e2b}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);padding:28px;line-height:1.4}
+  .wrap{max-width:920px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--text2);font-size:13.5px;margin-bottom:18px}
+  .stats{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:11px 15px;flex:1;min-width:160px}
+  .stat .n{font-size:17px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--text2);margin-bottom:18px;align-items:center}
+  .legend>span{display:inline-flex;align-items:center;gap:6px}
+  .grid{display:flex;flex-direction:column;gap:11px}
+  .fn{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 15px}
+  .fn-h{display:flex;align-items:baseline;gap:9px;margin-bottom:8px}
+  .fn-name{font-weight:650;font-size:15px}
+  .fn-sub{color:var(--muted);font-size:11.5px;font-family:var(--mono)}
+  .lane{display:flex;gap:10px;align-items:flex-start;padding:3px 0}
+  .lane-l{width:80px;flex:none;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding-top:7px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:5px 9px;font-size:12.5px;font-weight:560;border:1px solid transparent}
+  .chip .meta{font-weight:450;font-size:10.5px;opacity:.85}
+  .free{background:#EAF3DE;color:#27500A;border-color:#C0DD97}
+  .paid{background:#FAEEDA;color:#633806;border-color:#FAC775}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .ok{background:#0ca30c}.scaf{background:#fab219}
+  .none{color:var(--muted);font-size:12.5px;padding-top:5px}
+  .ft{margin-top:16px;font-size:12px;color:var(--text2);line-height:1.6}
+</style>
+</head>
+<body><div class="wrap">
+  <h1>Blockchain Investigation Hub — Data Sourcing Map</h1>
+  <div class="sub">Every function is covered by at least one <b>free</b> source · all paid APIs are optional and additive.</div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">5 / 5</div><div class="l">Functions free-covered</div></div>
+    <div class="stat"><div class="n">Complete &amp; green</div><div class="l">Free baseline</div></div>
+    <div class="stat"><div class="n">4 · optional</div><div class="l">Paid sources (opt-in)</div></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="chip free" style="padding:2px 7px">Free</span> baseline</span>
+    <span><span class="chip paid" style="padding:2px 7px">Paid</span> optional</span>
+    <span><span class="dot ok"></span> built &amp; green</span>
+    <span><span class="dot scaf"></span> scaffolded (key-gated)</span>
+    <span>⚠ caveat</span>
+  </div>
+
+  <div class="grid">
+    <div class="fn">
+      <div class="fn-h"><span class="fn-name">EVM on-chain facts</span><span class="fn-sub">tx · transfers · balance</span></div>
+      <div class="lane"><div class="lane-l">Free</div><div class="chips">
+        <span class="chip free"><span class="dot ok"></span>Etherscan V2<span class="meta">free key · ⚠ chains</span></span>
+        <span class="chip free"><span class="dot ok"></span>Blockscout / RPC<span class="meta">fallback</span></span>
+      </div></div>
+      <div class="lane"><div class="lane-l">Paid · opt</div><div class="chips">
+        <span class="chip paid"><span class="dot scaf"></span>Bitquery<span class="meta">GraphQL · Bearer</span></span>
+      </div></div>
+    </div>
+    <div class="fn">
+      <div class="fn-h"><span class="fn-name">Bitcoin on-chain facts</span><span class="fn-sub">tx · UTXO · balance</span></div>
+      <div class="lane"><div class="lane-l">Free</div><div class="chips">
+        <span class="chip free"><span class="dot ok"></span>Esplora (Blockstream)<span class="meta">no key</span></span>
+        <span class="chip free"><span class="dot ok"></span>mempool.space<span class="meta">fallback</span></span>
+      </div></div>
+      <div class="lane"><div class="lane-l">Paid · opt</div><div class="chips"><span class="none">— none needed</span></div></div>
+    </div>
+    <div class="fn">
+      <div class="fn-h"><span class="fn-name">Valuation</span><span class="fn-sub">price-at-time</span></div>
+      <div class="lane"><div class="lane-l">Free</div><div class="chips">
+        <span class="chip free"><span class="dot ok"></span>DeFiLlama<span class="meta">no key</span></span>
+      </div></div>
+      <div class="lane"><div class="lane-l">Paid · opt</div><div class="chips"><span class="none">— none needed</span></div></div>
+    </div>
+    <div class="fn">
+      <div class="fn-h"><span class="fn-name">Attribution</span><span class="fn-sub">entity · label</span></div>
+      <div class="lane"><div class="lane-l">Free</div><div class="chips">
+        <span class="chip free"><span class="dot ok"></span>GraphSense TagPacks<span class="meta">open · primary</span></span>
+        <span class="chip free"><span class="dot ok"></span>Dune labels<span class="meta">free tier</span></span>
+        <span class="chip free"><span class="dot ok"></span>ethereum-lists<span class="meta">open</span></span>
+      </div></div>
+      <div class="lane"><div class="lane-l">Paid · opt</div><div class="chips">
+        <span class="chip paid"><span class="dot scaf"></span>Arkham API<span class="meta">entity+label</span></span>
+        <span class="chip paid"><span class="dot scaf"></span>MisTrack<span class="meta">$0.10/label</span></span>
+        <span class="chip paid"><span class="dot scaf"></span>OKLink<span class="meta">⚠ TODO</span></span>
+      </div></div>
+    </div>
+    <div class="fn">
+      <div class="fn-h"><span class="fn-name">Risk</span><span class="fn-sub">sanctions · categorical · score</span></div>
+      <div class="lane"><div class="lane-l">Free</div><div class="chips">
+        <span class="chip free"><span class="dot ok"></span>OFAC SDN<span class="meta">no key</span></span>
+        <span class="chip free"><span class="dot ok"></span>Chainalysis sanctions<span class="meta">free key</span></span>
+        <span class="chip free"><span class="dot ok"></span>GraphSense abuse<span class="meta">categorical</span></span>
+      </div></div>
+      <div class="lane"><div class="lane-l">Paid · opt</div><div class="chips">
+        <span class="chip paid"><span class="dot scaf"></span>MisTrack<span class="meta">3–100 score</span></span>
+        <span class="chip paid"><span class="dot scaf"></span>Arkham API<span class="meta">0–100 score</span></span>
+        <span class="chip paid"><span class="dot scaf"></span>OKLink<span class="meta">⚠ TODO</span></span>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <b>Free baseline:</b> Etherscan · Esplora · DeFiLlama · GraphSense · OFAC + Chainalysis-sanctions — all built &amp; green.
+    Paid sources (Bitquery · Arkham · MisTrack · OKLink) are <b>additive</b>, selectable only when enabled <i>and</i> keyed, and stored side-by-side — never merged (Invariant&nbsp;#4).
+    <span class="dot scaf" style="display:inline-block;vertical-align:middle"></span> = built but key-gated (untested without a key); OKLink's AML endpoints remain TODO.
+  </div>
+</div></body></html>

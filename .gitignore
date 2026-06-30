@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+# Code-signing certs / private keys must NEVER be committed (P9 signing reads these from paths/env).
+*.pfx
+*.p12
+*.snk
+
+# Runtime case folders are user data — never committed (CLAUDE.md §3).
+cases/
+# ...but keep the directory present in the tree.
+!cases/.gitkeep
+
+# Shared library cache DB (performance only; not part of any case).
+library_cache.db
+*.db-wal
+*.db-shm
+
+# Portable case bundles are user data — EXCEPT the committed showcase sample under examples/ (P10).
+*.casefile
+!examples/**/*.casefile
+
+# Build/release scratch the showcase + installer produce (the committed sample lives under examples/).
+installer/Output/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Playwright
+/test-results/
+/playwright-report/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code / agent-local config (carries local paths + permissions — never ship)
+.claude/

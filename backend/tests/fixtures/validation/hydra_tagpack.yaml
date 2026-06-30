@@ -1,0 +1,20 @@
+# BOUNDED SLICE of the real public GraphSense TagPack `packs/hydra.yaml`
+# (github.com/graphsense/graphsense-tagpacks, creator: GraphSense Core Team). Header preserved
+# VERBATIM from the upstream pack; the `tags:` list is trimmed to the validation anchor
+# (16ZSAEfYpPCj3D94fsNt2okYj9Ue8mxy6T) + one more of the 117 Hydra addresses, so the fixture stays
+# small while remaining a faithful structured import of public data (Invariant #1, no scraping).
+# Each bare `- address:` inherits the header label/category/currency/confidence/actor/source.
+title: Hydra Market
+creator: GraphSense Core Team
+confidence: authority_data
+description: Addresses related to Hydra Market
+category: market
+currency: BTC
+label: Hydra Market
+is_cluster_definer: true
+lastmod: 2023-05-10
+source: https://home.treasury.gov/policy-issues/financial-sanctions/recent-actions/20220405
+actor: hydramarket
+tags:
+- address: 16ZSAEfYpPCj3D94fsNt2okYj9Ue8mxy6T
+- address: 1MQBDeRWsiJBf7K1VGjJ7PWEL6GJXMfmLg

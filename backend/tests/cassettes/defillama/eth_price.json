@@ -1,0 +1,11 @@
+{
+  "coins": {
+    "coingecko:ethereum": {
+      "decimals": 18,
+      "symbol": "ETH",
+      "price": 2000.5,
+      "timestamp": 1735689600,
+      "confidence": 0.99
+    }
+  }
+}

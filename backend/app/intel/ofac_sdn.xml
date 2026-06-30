@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ============================================================================================
+     BUNDLED OFAC SDN CRYPTO-ADDRESS SNAPSHOT (P8.7.3). A curated subset of REAL, public OFAC SDN
+     "Digital Currency Address" designations, shipped so "Check intel" sanctions screening works fully
+     OFFLINE out of the box. This is the APP's live bundled intel — it is DISTINCT from the tiny
+     per-case validation fixtures under backend/tests/fixtures/ (those drive the make-smoke validation
+     cases only and are never shipped as the app's intel source).
+
+     NOT the complete current SDN list. Use Settings -> Intel sources -> "Refresh from source" to pull
+     the full current sdn.xml from https://www.treasury.gov/ofac/downloads/sdn.xml.
+
+     EDITION DATE = 01/15/2025 (Publish_Date below). Every address here was REAL and simultaneously on
+     the OFAC SDN on that date. Sanctions are MUTABLE (Invariant #6 / the OFAC connector records each
+     fetch as a dated observation and reports delistings): NOTABLY, **Tornado Cash was DELISTED from the
+     SDN on 2025-03-21** (Fifth Circuit ruling, Treasury action) — it is included here because it was a
+     valid designation as of this 2025-01-15 edition, and remains the canonical worked example of a
+     sanctioned mixer. Refresh from source for the post-delisting current list.
+
+     SOURCES (confirmed, CLAUDE.md §6, 2026-06-30):
+       * Address->entity mapping: ultrasoundmoney/ofac-ethereum-addresses (data.csv) + 0xB10C/
+         ofac-sanctioned-digital-currency-addresses (the documented machine-readable SDN extracts).
+       * Tornado Cash designation (CYBER2, 2022-08-08; 38+ addresses): Treasury press release jy0916 +
+         OFAC recent-actions/20220808. Anchor 0x722122dF...b6967 + Donate 0x8589...fda16 verified.
+       * Garantex (RUSSIA-EO14024, 2022-04-05) + Hydra Market + Lazarus Group (Ronin) per OFAC.
+     Only XBT (base58 BTC) and ETH (0x) tickers are bundled — the two chains BIH v1 canonicalizes.
+     ============================================================================================ -->
+<sdnList xmlns="https://www.treasury.gov/ofac/downloads/sanctions/1.0/sdn.xsd">
+  <publshInformation>
+    <Publish_Date>01/15/2025</Publish_Date>
+    <Record_Count>8</Record_Count>
+  </publshInformation>
+
+  <!-- TORNADO CASH — virtual-currency mixer (CYBER2), designated 2022-08-08; DELISTED 2025-03-21. -->
+  <sdnEntry>
+    <lastName>TORNADO CASH</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x722122dF12D4e14e13Ac3b6895a86e84145b6967</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x8589427373D6D84E98730D7795D8f6f8731FDA16</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xDD4c48C0B24039969fC16D1cdF626eaB821d3384</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- GARANTEX — Russian crypto exchange (E.O. 14024), designated 2022-04-05. -->
+  <sdnEntry>
+    <lastName>GARANTEX EUROPE OU</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>RUSSIA-EO14024</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x7FF9cFad3877F21d41Da833E2F775dB0569eE3D9</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>3Lpoy53K625zVeE47ZasiG5jGkAxJ27kh1</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- LAZARUS GROUP — DPRK state-sponsored (DPRK2/CYBER2); the Ronin Bridge exploiter + related. -->
+  <sdnEntry>
+    <uid>26687</uid>
+    <lastName>LAZARUS GROUP</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>DPRK2</program>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x098B716B8Aaf21512996dC57EB0615e2383E2f96</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xa0e1c89Ef1a489c9C7dE96311eD5Ce5D32c20E4B</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x3Cffd56B47B7b41c56258D9C7731ABaDc360E073</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x53b6936513e738f44FB50d2b9476730C0Ab3Bfc1</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x35fB6f6DB4fb05e6A4cE86f2C93691425626d4b1</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xF7B31119c2682c88d88D455dBb9d5932c65Cf1bE</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- HYDRA MARKET — Russian darknet market (CYBER2), designated 2022-04-05 (2 of 117 BTC addresses). -->
+  <sdnEntry>
+    <uid>36216</uid>
+    <lastName>HYDRA MARKET</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>16ZSAEfYpPCj3D94fsNt2okYj9Ue8mxy6T</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - XBT</idType>
+        <idNumber>1MQBDeRWsiJBf7K1VGjJ7PWEL6GJXMfmLg</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- SUEX OTC — crypto OTC (CYBER2), designated 2021-09-21 (first exchange so designated). -->
+  <sdnEntry>
+    <lastName>SUEX OTC, S.R.O.</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x2f389ce8bd8ff92de3402ffce4691d17fc4f6535</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x19aa5fe80d33a56d56c78e82ea5e50e5d80b4dff</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xe7aa314c77f4233c18c6cc84384a9247c0cf367b</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- CHATEX — crypto exchange (CYBER2), designated 2021-11-08. -->
+  <sdnEntry>
+    <lastName>CHATEX</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x67d40EE1A85bf4a4Bb7Ffae16De985e8427B6b45</idNumber>
+      </id>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x6f1ca141a28907f78ebaa64fb83a9088b02a8352</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+
+  <!-- Individuals tied to crypto laundering (entity name = "LAST, First", sdnType Individual). Program
+       codes omitted where not independently confirmed (the rationale is honest without them). -->
+  <sdnEntry>
+    <lastName>POTEKHIN</lastName>
+    <firstName>Danil</firstName>
+    <sdnType>Individual</sdnType>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x7F367cC41522cE07553e823bf3be79A889DEbe1B</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <lastName>KARASAVIDI</lastName>
+    <firstName>Dmitrii</firstName>
+    <sdnType>Individual</sdnType>
+    <idList>
+      <id>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0xd882cfc20f52f2599d84b8e8d58c7fb62cfe344b</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>

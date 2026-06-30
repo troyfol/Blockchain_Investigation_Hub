@@ -1,0 +1,20 @@
+# GraphSense confidence taxonomy (id,level) — vendored, not fetched per-call (Invariant #1).
+# Source: https://raw.githubusercontent.com/graphsense/graphsense-tagpack-tool/master/src/tagpack/db/confidence.csv
+# Confirmed 2026-06-28 (docs/findings/graphsense_tagpack_reconciliation.md). The TagPack `confidence`
+# field is a categorical *id*, not a float; BIH maps it to Attribution.confidence = level/100 and keeps
+# the raw id text in Attribution.note. TODO: confirm against the live confidence.csv on each refresh
+# (ids/levels may change upstream; an unknown id maps to confidence=None, never a guessed level).
+id,level
+ownership,100
+ledger_immanent,100
+override,100
+manual_transaction,90
+service_api,70
+forensic_investigation,70
+authority_data,60
+service_data,50
+forensic,50
+trusted_provider,50
+web_crawl,20
+heuristic,10
+unknown,5

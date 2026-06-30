@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A small OFAC SDN snapshot for the Ronin/Lazarus validation case (docs/validation/ronin_lazarus_case.md).
+     Two real designations: the Ronin Bridge Exploiter ETH address under LAZARUS GROUP (DPRK, designated
+     2022-04-14 — the anchor + headline validation hook) and a Tornado Cash ETH address (designated
+     2022-08-08). Both are real public OFAC SDN entries; BIH's free OFAC pillar should independently flag
+     each as sanctioned. -->
+<sdnList xmlns="https://www.treasury.gov/ofac/downloads/sanctions/1.0/sdn.xsd">
+  <publshInformation>
+    <Publish_Date>08/08/2022</Publish_Date>
+    <Record_Count>2</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>26687</uid>
+    <lastName>LAZARUS GROUP</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>DPRK2</program>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>900001</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x098B716B8Aaf21512996dC57EB0615e2383E2f96</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>30001</uid>
+    <lastName>TORNADO CASH</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>900002</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x722122dF12D4e14e13Ac3b6895a86e84145b6967</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>

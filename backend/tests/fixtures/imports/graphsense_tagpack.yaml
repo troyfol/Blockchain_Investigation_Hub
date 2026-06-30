@@ -1,0 +1,28 @@
+title: Mixed Sample TagPack
+creator: BIH Test Suite
+description: >-
+  Exercises header inheritance, a BTC + an ETH tag, confidence mapping (header default + per-tag
+  override), an unsupported-currency skip, an abuse tag (Phase B), and an actor link (Phase C).
+lastmod: 2026-06-01
+source: https://example.org/research/sample-tagpack
+confidence: forensic_investigation
+category: exchange
+tags:
+  # BTC tag — inherits source / confidence / category from the header.
+  - address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+    label: Sample Exchange Hot Wallet
+    currency: BTC
+    actor: sample_exchange
+    is_cluster_definer: true
+  # ETH tag (checksummed) — overrides confidence (ownership=100) + category, carries an abuse type.
+  - address: 0x52908400098527886E0F7030069857D2E4169EE7
+    label: Sample Exchange Deposit
+    currency: ETH
+    confidence: ownership
+    category: organization
+    abuse: scam
+  # Litecoin — UNSUPPORTED currency: must be skipped + reported, never canonicalized.
+  - address: LdP8Qox1VAhCzLJNqrr74YovaWYyNBUWvL
+    label: Some Litecoin Address
+    currency: LTC
+    category: wallet_service

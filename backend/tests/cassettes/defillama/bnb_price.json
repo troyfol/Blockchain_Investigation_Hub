@@ -1,0 +1,10 @@
+{
+  "coins": {
+    "coingecko:binancecoin": {
+      "symbol": "BNB",
+      "price": 241.98,
+      "timestamp": 1700000000,
+      "confidence": 0.99
+    }
+  }
+}

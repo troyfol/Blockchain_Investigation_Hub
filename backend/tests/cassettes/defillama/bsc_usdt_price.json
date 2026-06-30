@@ -1,0 +1,11 @@
+{
+  "coins": {
+    "bsc:0x55d398326f99059ff775485246999027b3197955": {
+      "decimals": 18,
+      "symbol": "USDT",
+      "price": 1.0,
+      "timestamp": 1700000000,
+      "confidence": 0.99
+    }
+  }
+}

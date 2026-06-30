@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # CI doesn't need a real browser for Phase 0-8; Phase 9 reporting tests will
+      # opt back in. Keeps the gate fast and deterministic.
+      BIH_SKIP_PLAYWRIGHT_BROWSERS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: make setup
+        run: make setup PYTHON=python
+
+      - name: make test
+        run: make test
+
+      - name: make audit
+        run: make audit
+
+      - name: make smoke
+        run: make smoke

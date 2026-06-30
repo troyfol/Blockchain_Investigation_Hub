@@ -1,0 +1,40 @@
+/* Investigation report stylesheet (phase_09). Print-oriented (A4), neutral, legible.
+   COLORS: every color is a var(--bih-*) from the single token catalog (frontend/src/theme/tokens.json),
+   injected ahead of this file as a :root block by services/reporting.py (backend/app/theme.py). No
+   hardcoded hex here — the report shares its palette with the live graph, and the customization UI
+   overrides both from one place. */
+* { box-sizing: border-box; }
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  color: var(--bih-report-text); margin: 0; padding: 28px 34px; font-size: 12px; line-height: 1.45;
+}
+h1 { font-size: 21px; margin: 0 0 2px; }
+h2 { font-size: 15px; margin: 22px 0 8px; border-bottom: 1.5px solid var(--bih-report-heading-border); padding-bottom: 3px; }
+h3 { font-size: 12.5px; margin: 12px 0 4px; }
+.sub { color: var(--bih-report-subtext); font-size: 11px; }
+.caveat {
+  background: var(--bih-report-caveat-bg); border: 1px solid var(--bih-report-caveat-border); border-radius: 5px;
+  padding: 9px 12px; margin: 12px 0; font-size: 11px;
+}
+.caveat b { color: var(--bih-report-caveat-text); }
+table { border-collapse: collapse; width: 100%; margin: 6px 0 4px; }
+th, td { border: 1px solid var(--bih-report-table-border); padding: 4px 7px; text-align: left; vertical-align: top; }
+th { background: var(--bih-report-table-headerBg); font-weight: 600; }
+.mono { font-family: "Consolas", "SFMono-Regular", monospace; font-size: 10.5px; word-break: break-all; }
+.muted { color: var(--bih-report-muted); }
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10px; font-weight: 600;
+}
+.pill.fifo { background: var(--bih-report-pill-fifo-bg); color: var(--bih-report-pill-fifo-text); }
+.pill.investigator { background: var(--bih-report-pill-investigator-bg); color: var(--bih-report-pill-investigator-text); }
+.pill.contested { background: var(--bih-report-pill-contested-bg); color: var(--bih-report-pill-contested-text); }
+.pill.canonical { background: var(--bih-report-pill-canonical-bg); color: var(--bih-report-pill-canonical-text); }
+.pill.resolved { background: var(--bih-report-pill-resolved-bg); color: var(--bih-report-pill-resolved-text); }
+.pill.missing { background: var(--bih-report-pill-missing-bg); color: var(--bih-report-pill-missing-text); }
+.pill.sanctioned { background: var(--bih-report-pill-sanctioned-bg); color: var(--bih-report-pill-sanctioned-text); }
+.pill.elevated { background: var(--bih-report-pill-elevated-bg); color: var(--bih-report-pill-elevated-text); }
+#cy { width: 100%; height: 460px; border: 1px solid var(--bih-report-cy-border); border-radius: 5px; background: var(--bih-canvas-background); }
+.legend { font-size: 10px; color: var(--bih-report-subtext); margin-top: 4px; }
+.legend span { margin-right: 12px; }
+.footer { margin-top: 26px; font-size: 10px; color: var(--bih-report-footer-text); border-top: 1px solid var(--bih-report-footer-border); padding-top: 8px; }
+.empty { color: var(--bih-report-empty); font-style: italic; }

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A later SDN edition: EVIL MIXER LLC (the XBT entry, uid 10001) has been DELISTED (removed); DOE and
+     STABLE SCAM remain; a NEW BAD ACTOR (ARB) is added. The XMR holder remains (still skipped). -->
+<sdnList xmlns="https://www.treasury.gov/ofac/downloads/sanctions/1.0/sdn.xsd">
+  <publshInformation>
+    <Publish_Date>06/27/2026</Publish_Date>
+    <Record_Count>4</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>10002</uid>
+    <firstName>John</firstName>
+    <lastName>DOE</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>SDGT</program>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>90003</uid>
+        <idType>Digital Currency Address - ETH</idType>
+        <idNumber>0x8589427373D6D84E98730D7795D8f6f8731FDA16</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10003</uid>
+    <lastName>STABLE SCAM INC</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>90004</uid>
+        <idType>Digital Currency Address - USDT</idType>
+        <idNumber>0x7F367cC41522cE07553e823bf3be79A889DEbe1B</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10005</uid>
+    <lastName>NEW BAD ACTOR</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>90006</uid>
+        <idType>Digital Currency Address - ARB</idType>
+        <idNumber>0x098B716B8Aaf21512996dC57EB0615e2383E2f96</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10004</uid>
+    <lastName>PRIVACY COIN HOLDER</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CYBER2</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>90005</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>monero1unsupportedaddressxxxxxxxxxxxxxxxxxxxx</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>

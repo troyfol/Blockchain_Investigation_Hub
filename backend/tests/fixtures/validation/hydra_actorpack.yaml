@@ -1,0 +1,20 @@
+# BOUNDED SLICE of the real public GraphSense ActorPack `actors/graphsense.actorpack.yaml`
+# (github.com/graphsense/graphsense-tagpacks). Trimmed to the single `hydramarket` actor that the
+# Hydra TagPack's `actor:` ref resolves to — VERBATIM from upstream — so `get_entities` materializes
+# the entity "Hydra Market" (the positive-attribution entity headline). Structured import of public
+# data (Invariant #1).
+title: GraphSense Actors (Hydra slice)
+creator: GraphSense Core Team
+actors:
+- id: hydramarket
+  label: Hydra Market
+  uri: https://hydramarket.co/
+  categories:
+  - dark_web
+  - market
+  jurisdictions:
+  - RU
+  context:
+    refs:
+    - https://home.treasury.gov/policy-issues/financial-sanctions/recent-actions/20220405
+    active: false

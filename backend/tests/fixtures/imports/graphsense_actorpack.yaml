@@ -1,0 +1,9 @@
+title: Sample ActorPack
+creator: BIH Test Suite
+description: A minimal ActorPack defining the real-world actor a TagPack tag links to.
+actors:
+  - id: sample_exchange
+    label: Sample Exchange Inc.
+    categories: [exchange, organization]
+    jurisdictions: [US]
+    uri: https://sample.example

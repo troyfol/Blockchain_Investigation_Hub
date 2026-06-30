@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blockchain-investigation-hub"
+version = "0.0.0"
+description = "Provenance-first integration-and-reporting hub for blockchain investigations"
+readme = "README.md"
+requires-python = ">=3.12"
+# GPL-3.0-or-later (P10 / v1.0.0). Copyleft chosen so the GPL-2.0+ python-igraph Leiden dependency can be
+# combined cleanly (GPLv2-or-later is compatible with GPLv3). See LICENSE + THIRD_PARTY_LICENSES.md.
+license = { text = "GPL-3.0-or-later" }
+
+# Pins per CLAUDE.md §2. These are compatible-release floors; `make setup` records the
+# actually-resolved versions in PROGRESS.md (CONFIRM-AT-BUILD for Phase 0).
+dependencies = [
+    "fastapi>=0.138,<0.139",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28,<0.29",
+    "yoyo-migrations>=9.0",
+    "keyring>=25.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Frontend reporting + the test stack live here so a lean runtime install is possible.
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "hypothesis>=6.122",
+    "respx>=0.22",
+    "playwright>=1.60",
+]
+# The post-v1 one-click desktop launcher (pywebview opens a native window over the local app).
+app = [
+    "pywebview>=5.3",
+]
+# P8.8 Leiden community detection (Traag 2019). OPTIONAL + import-guarded: igraph is GPL-licensed, so it is
+# invoked at runtime (never bundled into a redistributed binary) and the community overlay degrades to a
+# clear "unavailable" note when absent. `pip install -e .[clustering]` enables the visual community lens.
+clustering = [
+    "igraph>=0.11",
+]
+
+[project.scripts]
+bih-audit = "backend.app.audits.runner:main"
+bih-migrate = "backend.app.db.migrate:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+
+# Ship the migration SQL as data of the backend.app package (a subdir glob), so wheel
+# builds include them without making migrations/ a Python package (which would confuse yoyo).
+[tool.setuptools.package-data]
+"backend.app" = ["migrations/*.sql", "report_templates/*", "normalization/data/*.csv"]
+
+[tool.pytest.ini_options]
+# pythonpath lets `import backend.app...` resolve even without an editable install.
+pythonpath = ["."]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+# Fail loudly on unknown markers / config keys so a marker typo can't silently deselect
+# every test and pass green (docs/testing.md gate discipline).
+addopts = "--strict-markers --strict-config"
+markers = [
+    "smoke: golden end-to-end smoketests run by `make smoke`",
+    "property: Hypothesis property tests over invariants",
+    "contract: connector adapter tests replaying recorded cassettes",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

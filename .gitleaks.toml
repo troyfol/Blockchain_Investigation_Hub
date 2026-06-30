@@ -1,0 +1,23 @@
+# gitleaks config for the Blockchain Investigation Hub.
+#
+# This is a blockchain tool: public on-chain identifiers (EVM 0x-addresses, Tron/BTC base58 addresses,
+# 32/64-byte tx hashes) are PERVASIVE across the code, tests, docs, and the committed sample case — and
+# they are NOT secrets (anyone can read them on-chain). gitleaks' generic high-entropy rule flags them as
+# "generic-api-key". We allowlist the on-chain identifier FORMATS so the scan stays signal-rich.
+#
+# This is safe: the allowlist only suppresses a finding when the matched secret IS an on-chain identifier.
+# Real credentials (AWS AKIA…, GitHub ghp_…, PEM private keys, provider API keys) do not match these
+# formats, so gitleaks' specific rules still fire on them.
+
+title = "BIH gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public on-chain identifiers (addresses + tx hashes) are not secrets in a blockchain tool."
+regexes = [
+  '''0x[a-fA-F0-9]{40}''',            # EVM address (20 bytes)
+  '''0x[a-fA-F0-9]{64}''',            # EVM / 32-byte tx hash
+  '''T[1-9A-HJ-NP-Za-km-z]{33}''',    # Tron base58 address
+]

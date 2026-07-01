@@ -33,6 +33,9 @@ Leiden community overlay → a curated, bounded report. The artifacts below ship
 
 <img width="1883" height="1018" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/0887acf5-1b07-4aaa-bc96-ed311bc33b0b" />
 
+*Stylized in-app view.*
+
+
 - **Report:** [`report.html`](examples/Sample_Tornado_Cash/report.html) (self-contained, hash-verified) ·
   [`report.pdf`](examples/Sample_Tornado_Cash/report.pdf)
 - **Portable bundle:** [`Sample_Tornado_Cash.casefile`](examples/Sample_Tornado_Cash/Sample_Tornado_Cash.casefile)

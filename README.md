@@ -31,7 +31,7 @@ Leiden community overlay → a curated, bounded report. The artifacts below ship
 
 *Curated current-view exhibit (print-light palette). Vector: [`exhibit.svg`](examples/Sample_Tornado_Cash/exhibit.svg). The sanctioned anchor carries a red halo + "Tornado Cash" ring; thousands of same-pair movements collapse into one "… ×N" edge so the mixer stays legible.*
 
-<img width="1883" height="1018" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/0887acf5-1b07-4aaa-bc96-ed311bc33b0b" />
+<img width="1882" height="1016" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/95edb7f8-ea64-4d2f-afb4-273bf9a88a01" />
 
 *Stylized in-app view.*
 

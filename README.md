@@ -31,10 +31,7 @@ Leiden community overlay → a curated, bounded report. The artifacts below ship
 
 *Curated current-view exhibit (print-light palette). Vector: [`exhibit.svg`](examples/Sample_Tornado_Cash/exhibit.svg). The sanctioned anchor carries a red halo + "Tornado Cash" ring; thousands of same-pair movements collapse into one "… ×N" edge so the mixer stays legible.*
 
-<!-- IN-APP SCREENSHOT SLOT — drop a screenshot of the live Cytoscape canvas here (e.g. docs/screenshot-app.png)
-     and uncomment the next line:
-![Blockchain Investigation Hub — in-app investigation graph](docs/screenshot-app.png)
--->
+<img width="1883" height="1018" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/0887acf5-1b07-4aaa-bc96-ed311bc33b0b" />
 
 - **Report:** [`report.html`](examples/Sample_Tornado_Cash/report.html) (self-contained, hash-verified) ·
   [`report.pdf`](examples/Sample_Tornado_Cash/report.pdf)

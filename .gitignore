@@ -57,3 +57,5 @@ Thumbs.db
 
 # Claude Code / agent-local config (carries local paths + permissions — never ship)
 .claude/
+# The build contract is kept LOCAL only (not published) — untracked + ignored so pushes never include it.
+CLAUDE.md

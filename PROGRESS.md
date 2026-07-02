@@ -6,7 +6,8 @@
 ## Current state
 
 - **Active phase:** **ALL PHASES (0–10) COMPLETE** + post-v1 launcher + live-API test + **Arkham import re-scoped to reality** + **GraphSense (free attribution pillar)** + **OFAC/Chainalysis (free risk pillar)** + **optional PAID integration layer (Bitquery/Arkham-API/MisTrack/OKLink)** + **internal roadmap (finality upgrade, cross-source reconciliation, batched valuation, BTC operator flow)** + **validation harnesses (Ronin/Lazarus · EVM, Colonial Pipeline/DarkSide · clean-UTXO, Bitfinex 2016 · heavy-UTXO co-spend, Hydra/Garantex · positive GraphSense attribution + multi-source never-merge, CoinJoin detection · Whirlpool deconfusion boundary) recreated + diffed vs ground truth**.
-- **Last green (2026-06-30):** **v1.0.0 — licensed GPL-3.0-or-later** (copyleft chosen so the GPL deps igraph + cytoscape-svg combine cleanly; full breakdown in `THIRD_PARTY_LICENSES.md`); a real Tornado-Cash showcase ships in `examples/Sample_Tornado_Cash/` (report HTML+PDF, verified `.casefile`, SVG+PNG exhibit hero); secret/PII scan **clean** (gitleaks + manual). `make test` (441 passed, 12 live-drift skipped — +1 P10 export-PII-scrub test) / `make audit` (10/10 checks; dev + Garantex; clustering output is audit-clean) / `make smoke` (30 golden, incl. the Ronin/Lazarus + Colonial Pipeline + Bitfinex 2016 + Hydra/Garantex + CoinJoin-detection validations + the bundled-OFAC/GraphSense real-snapshot guards + investigator-label export round-trip + the scalable-view + investigator-UX suites + the report PDF render + the P4 new/import round-trip + tamper-rejection) / **P8 `make smoke-frozen` (15/15 — the frozen one-folder DoD gate; the REAL intel snapshots bundled + igraph for Leiden)** / frontend `vitest run` (142 passed — +4 P8.8 clustering-client) + `tsc --noEmit` clean + `vite build` clean; `make package` builds a **54 MB** `dist/BIH/` (lean — no bundled Chromium; +igraph for the community lens; the exe carries the `8.ico` app icon + **embedded version-info** — Company/Product/**Version 1.0.0**/Copyright, P9); **`make installer` (Inno Setup 6.7.3) builds a 24 MB UNSIGNED `dist/installer/BIH-Setup-1.0.0.exe`** (per-user/Program-Files, Start-Menu+Desktop 8.ico shortcuts, clean uninstaller that preserves `%APPDATA%\BlockchainInvestigationHub` cases — verified install→smoke→uninstall; signing wired-but-optional, `make sign`/`make verify-sign` skip cleanly with no cert; the installed copy passes `smoke-frozen` **15/15**); `make report` (HTML hashed + PDF via OS Edge), `make export --verify`, the hardened desktop launcher (`scripts/launch.py --check` exits 0), and a live run all verified end-to-end. Schema at **0010** (`entity.origin` widened + `erc20_approval`; `schema_version` 6).
+- **Last green (2026-07-01):** review-baseline remediation (R0 findings **BASE-01** render-fallback + **BASE-02** schema-aware audit baselines — full record in `docs/review/FINDINGS.md` + `REVIEW_LOG.md`): `make test` **457 passed / 12 skipped** · `make audit` **10/10 on dev + garantex + live** · `make smoke` **30**. No schema change. Details in Post-v1 work below.
+- **v1.0.0 release green (2026-06-30):** **v1.0.0 — licensed GPL-3.0-or-later** (copyleft chosen so the GPL deps igraph + cytoscape-svg combine cleanly; full breakdown in `THIRD_PARTY_LICENSES.md`); a real Tornado-Cash showcase ships in `examples/Sample_Tornado_Cash/` (report HTML+PDF, verified `.casefile`, SVG+PNG exhibit hero); secret/PII scan **clean** (gitleaks + manual). `make test` (441 passed, 12 live-drift skipped — +1 P10 export-PII-scrub test) / `make audit` (10/10 checks; dev + Garantex; clustering output is audit-clean) / `make smoke` (30 golden, incl. the Ronin/Lazarus + Colonial Pipeline + Bitfinex 2016 + Hydra/Garantex + CoinJoin-detection validations + the bundled-OFAC/GraphSense real-snapshot guards + investigator-label export round-trip + the scalable-view + investigator-UX suites + the report PDF render + the P4 new/import round-trip + tamper-rejection) / **P8 `make smoke-frozen` (15/15 — the frozen one-folder DoD gate; the REAL intel snapshots bundled + igraph for Leiden)** / frontend `vitest run` (142 passed — +4 P8.8 clustering-client) + `tsc --noEmit` clean + `vite build` clean; `make package` builds a **54 MB** `dist/BIH/` (lean — no bundled Chromium; +igraph for the community lens; the exe carries the `8.ico` app icon + **embedded version-info** — Company/Product/**Version 1.0.0**/Copyright, P9); **`make installer` (Inno Setup 6.7.3) builds a 24 MB UNSIGNED `dist/installer/BIH-Setup-1.0.0.exe`** (per-user/Program-Files, Start-Menu+Desktop 8.ico shortcuts, clean uninstaller that preserves `%APPDATA%\BlockchainInvestigationHub` cases — verified install→smoke→uninstall; signing wired-but-optional, `make sign`/`make verify-sign` skip cleanly with no cert; the installed copy passes `smoke-frozen` **15/15**); `make report` (HTML hashed + PDF via OS Edge), `make export --verify`, the hardened desktop launcher (`scripts/launch.py --check` exits 0), and a live run all verified end-to-end. Schema at **0010** (`entity.origin` widened + `erc20_approval`; `schema_version` 6).
 - **Schema version:** **3** (Phase 1 = 0001-0005 → v1; GraphSense **0006** `entity.external_id` → v2; cross-source transfer reconciliation **0007** `transfer.occurrence` + content-based `ux_transfer` → v3). All forward-only; 0007 backfills `occurrence` per content-group before rebuilding the unique index so a populated case.db upgrades safely.
 
 ## Environment (this machine)
@@ -32,6 +33,178 @@
 | 10 Export | **complete** | 2026-06-27 | `services/export.py`: `build_manifest` (SHA-256 of `case.db` + every file under `raw_responses/`, `exhibits/`, `reports/`, `.audit_baselines/`), `export_case` → `<case>.casefile` zip, `verify_casefile` (re-extract → hashes match + no unlisted file + DB self-contained: no attached DBs, `foreign_key_check` empty, every `raw_response_ref`/`file_ref`/`rendered_file_ref` resolves in-bundle, no-dangling-fk audit passes). `scripts/export.py` + Makefile `export` target (`--verify`). **Build index relocated** `README.md` → `docs/BUILD_INDEX.md`; **product `README.md`** written with the mandatory "Default settings & how to tune them" section (finality thresholds first, then TTL/bounds/valuation precision/CoinJoin/confidence) + honest trust model (local-clock timestamps; tamper-evidence not tamper-proof; non-repudiation deferred). Adversarial review hardened the untrusted-bundle path: `verify_casefile` now rejects absolute/`..` DB file-refs (path-escape) + states the threat model in the `export.py` docstring & README (rewrite-both is out of scope → re-export on a trusted machine to compare); NULL `raw_response_ref` documented as intentional for locally-computed source_queries; added path-escape + determinism tests. 149 tests. `make export --verify` green end-to-end. |
 
 ## Post-v1 work
+
+- **R6 deferred-work follow-on — the 4 items R6 deferred, now DONE (2026-07-02).** After R6 landed all 12
+  batches, the user opted to tackle the four explicitly-deferred items; each was implemented failing-test-first
+  with the gate kept green. **(1) EFF-01 `api_node_summary` node-scoping:** `build_graph` gained a
+  `focus_incident` filter that bounds its two O(case) scans (`v_value_movement` + `tx_input`) to a node's
+  neighborhood, REUSING all its node/edge/label/flag/aggregation logic — so the summary is provably identical
+  to the full-graph result (an equivalence test compares the focused endpoint to the full-graph oracle across
+  EVM-address / BTC-address / BTC-tx-node / flagged-counterparty), just cheaper. **(2) LOG-04 trace-builder
+  UI:** new `frontend/src/traces.ts` client + `traces.test.ts` (5 vitest) + a `TraceBuilder` section in
+  `SidePanel.tsx` (create a trace; add the selected EVM transfer; FIFO-apportion the selected BTC tx), wired
+  through `App.tsx` (handlers refresh the trace list + view). tsc clean, vitest 147, vite build ok. **(3)
+  LOG-06 approvals via Etherscan `getLogs`:** confirmed the getLogs shape + the ERC-20 Approval topic0
+  (`0x8c5be1e5…b925`, verified on 4byte.directory) against live docs (CLAUDE.md §6); new `Erc20Approval` model
+  + `repo.insert_erc20_approval` (insert-once) + `adapt_approval_logs` decoder + `EtherscanConnector
+  .get_erc20_approvals` (getLogs topic0=Approval, topic1=owner) + `POST /api/approvals/fetch` route — the EVM
+  self-authorization heuristic now FIRES on real data (was a permanent no-op). **(4) COR-01 deep reorg
+  cascade (derived-only policy, user's choice):** the sweep now DELETES a reorged provisional tx + its DERIVED
+  dependents (valuations of its movements, machine trace links) via `_delete_transaction_with_derived`, but
+  PRESERVES + reports a tx an investigator personally annotated/tagged/labeled/put a finding on
+  (`_tx_has_investigator_refs`) — human work is never silently destroyed. **+~14 tests**
+  (`test_node_summary_scoped.py`, `test_approvals_getlogs.py`, updated `test_reorg_sweep.py`, +frontend). **Gate
+  green: test 513 / audit 10/10 × dev+garantex+live / smoke 30 / vitest 147 / tsc + vite build clean.** No
+  schema migration (erc20_approval already existed in 0010); no new runtime deps. Remaining deferred (by
+  choice): the deep `build_view` focus/hop/cap recursive-CTE rewrite (highest-risk, acceptable at scale).
+
+- **R6 remediation — approved batches (2026-07-02, IN PROGRESS).** The R-track's R5 consolidation stopped
+  for approval; the user approved all 12 batches with forks locked (`docs/review/REMEDIATION_PLAN.md`). R6
+  implements them one at a time, failing-test-first, per the Definition of Done. Session-start ritual green
+  (audit 10/10 × dev+garantex+live, smoke 30). **Batch 1 (SEC-01 Critical + SEC-11/SEC-12) — DONE.** The
+  court-facing report inlined `var ELEMENTS = {json.dumps(elements)}` / `var STYLE = {cytoscape_style_json()}`
+  inside a `<script>`, and `json.dumps` does not escape `<`/`>`/`&`, so an attacker-controlled on-chain token
+  symbol / attribution name / investigator label containing `</script>…` broke out and executed during the
+  headless PDF render (stored code-execution into the flagship evidentiary artifact). Fix
+  (`services/reporting.py`): new **`_script_safe()`** escapes `<`→`<`, `>`→`>`, `&`→`&`, plus
+  U+2028/U+2029, applied to **both** the ELEMENTS and STYLE serializations — escaped values decode back in the
+  browser so labels survive as DATA, not markup (report stays faithful). For the latent `<style>` twin
+  (SEC-12): new **`theme.validate_color_value()`** (strict hex/rgb()/hsl()/named grammar) + a loud
+  **`_css_value_safe()`** guard in `css_root_block()` so the planned customize-UI can't reintroduce a
+  `</style>` breakout (bundled tokens are all hex/sizing numerics → no behavior change today). **+2
+  failing-first tests** (`tests/integration/test_report_render_injection.py`) that seed all three breakout
+  attempts (`</script>`, `<!--`, U+2028/U+2029) through the real graph path. **Gate green: test 459 / audit
+  10/10 (dev) / smoke 30.** No schema change; no new deps.
+  **Batch 2 (SEC-02 High + SEC-04/SEC-06/SEC-17) — DONE.** The localhost API had zero middleware, so a
+  hostile browser page could DNS-rebind to `127.0.0.1` for full read+write (SEC-02) and fire empty-body /
+  raw-body-`import-upload` CSRF (SEC-04), and `location`/`dest_root` were taken verbatim (SEC-06). Fix: new
+  **`backend/app/middleware.py::RequestProvenanceMiddleware`** (pure-ASGI, registered in `main.py`) — rejects
+  403 any non-loopback `Host` (blocks rebinding; port-agnostic loopback allowlist + the synthetic
+  `testserver` test authority) and any state-changing (POST/PUT/PATCH/DELETE) request with a foreign
+  `Origin`/`Referer` (same-origin / no-Origin passes, so the real UI + launcher health probe are unaffected).
+  `cases.py` gained **`_confined_root()`** confining `location`/`dest_root` to `cases_root()` (else 400;
+  checked before the file is read on import). `web.py`'s "single origin, no CORS" docstring corrected to say
+  it is not a cross-site defense (SEC-17). Dev-mode Vite proxy (`localhost:5173`) stays loopback → allowed.
+  **+9 failing-first tests** (`test_api_host_origin_guard.py` ×6, `test_case_location_confine.py` ×3).
+  **Gate green: test 468 / audit 10/10 (dev) / smoke 30.** No schema change; no new deps.
+  **Batch 3 (LOG-12/LOG-01/LOG-11/LOG-13 upsert clobbers + COR-01 reorg sweep) — DONE.** All in
+  `db/repository.py` + the chain connectors. **LOG-12:** `upsert_asset` decimals is no longer last-writer-wins
+  — a real (>0) chain-reported value is never downgraded by a defaulted 0/18; a placeholder 0 may still be
+  filled from a real later value (no schema change; symbol now COALESCE-preserved). **LOG-01:**
+  `upsert_tx_output` refresh is monotonic (`spent=MAX(...)`, `spending_tx_id=COALESCE(...)`) — a shared
+  funding-tx re-fetch never resets a spend to unspent or drops a spender. **LOG-11:** new `update_status`
+  param — Etherscan's `txlistinternal`/`tokentx` feeds no longer clobber `txlist`'s authoritative top-level
+  status on a provisional row (a succeeded tx whose first internal call reverted stays `success`). **LOG-13:**
+  new `authoritative` param — chain sources replace block_height/block_ts/confirmations wholesale on a
+  provisional re-fetch (reorg→mempool no longer leaves a confirmed/mempool hybrid), a partial import
+  COALESCE-fills, and every provisional update re-cites `source_query_id` (Inv #3). **COR-01 (implemented per
+  the user's fork):** `sweep_reorged_provisional()` wired into esplora + etherscan `get_transactions`, gated
+  on a COMPLETE fetch — a provisional tx absent from the fresh set is deleted with its Family-A children under
+  the fetch's source_query; a tx already carrying a downstream ref (valuation/trace/annotation/label/finding)
+  is PRESERVED + reported, not destroyed (the deep cascade is a documented deferred follow-up). **+8
+  failing-first tests** (`test_upsert_refresh_preserves.py` ×5, `test_reorg_sweep.py` ×3 incl. an
+  esplora-wired reachability test). **Gate green: test 476 / audit 10/10 × dev+garantex+live / smoke 30.**
+  No schema change; no new deps.
+  **Batch 4 (RES-01 + LOG-05 + EFF-04 valuation robustness) — DONE.** **RES-01:** `value_movements`
+  per-batch catch widened to `(ConnectorError, ValueError)` so a non-JSON 200 (`.json()` `JSONDecodeError`)
+  is an error+skip feeding the circuit-breaker, not a whole-pass abort. **LOG-05:** new
+  `canonical.to_canonical_ts()` (ISO/epoch → `…Z`, unparseable → None) applied in the Arkham + Bitquery
+  adapters (block_ts is now one canonical format everywhere), plus a consumer guard around
+  `_iso_to_unix(block_ts)` so a bad value is an honest skip, not a crash. **EFF-04:** `_unvalued_movements`
+  JOINs `asset` + `transaction_` and applies the pass cap as a SQL `LIMIT` (no materialize-all-then-slice,
+  no 2 point-queries per movement; `_load_asset` removed). **+5 failing-first tests**
+  (`test_valuation_batch_resilience.py`). **Gate green: test 480 / audit 10/10 (dev) / smoke 30.** No schema
+  change; no new deps.
+  **Batch 5 (SEC-03 + RES-02 error boundary) — DONE.** **SEC-03:** `connectors/base.py` converts a
+  persistent 4xx into a sanitized `UpstreamError(f"HTTP {code} from {_redact_url(url)}")` (new `_redact_url`
+  strips the query string) instead of `resp.raise_for_status()` → `httpx.HTTPStatusError`, whose message
+  embeds the key-bearing URL (Etherscan/MisTrack put `apikey` in the query) and would leak the key into the
+  500 logger; the ingest route already catches `ConnectorError`. **RES-02:** added
+  `app.exception_handler(sqlite3.OperationalError)` — `database is locked` → clean **503 + Retry-After** (a UI
+  write concurrent with the background valuation's own connection no longer surfaces a raw 500). Plus
+  defense-in-depth handlers for `httpx.HTTPStatusError` (sanitized 502; SEC-03 backstop) and `ConnectorError`
+  (clean 502). Deliberately **no blanket `Exception` catch-all** (would mask real bugs/change test semantics;
+  the leak is closed at the source). **+4 failing-first tests** (`test_connector_error_sanitization.py` ×2,
+  `test_db_lock_clean_error.py` ×2). **Gate green: test 484 / audit 10/10 (dev) / smoke 30.** No schema
+  change; no new deps.
+  **Batch 6 (LOG-02 + LOG-03 schema versioning, resolves BASE-03) — DONE.** **LOG-02:** `apply_migrations`
+  now re-stamps `case_meta.schema_version = CURRENT_SCHEMA_VERSION` after applying (was stamped once at
+  `init_case` and never updated → three identically-migrated DBs reported 5/3/1). No applied migration was
+  edited (forward-only preserved). Confirmed: dev/garantex/live all now read `schema_version=6`; the stamp is
+  on `case_meta` (not an audited table) so immutability baselines are untouched. **LOG-03:** new
+  `migrate.assert_supported_schema()` compares the DB's `_yoyo_migration` applied set (the reliable signal)
+  against the app's `known_migration_ids()` and raises `SchemaTooNewError` if the DB is ahead; wired into
+  `cases.set_active_case` before `apply_migrations`, and `api_open_case` maps it to a clean HTTP 409 —
+  opening a case created by a newer app version is now refused, not silently operated on. **+3 failing-first
+  tests** (`test_schema_version_guard.py`). **Gate green: test 487 / audit 10/10 × dev+garantex+live / smoke
+  30.** No schema change; no new deps.
+  **Batch 7 (LOG-10 + COR-02 + LOG-14 adapter fidelity) — DONE.** **LOG-10:** `adapt_arkham_transfers` keys
+  `by_tx` on `(chain, tx_hash)` (and `pos` on `(chain, tx_hash, transfer_type)`) so a replayed hash across two
+  chains in one multichain export yields two distinct `transaction_` rows, each transfer's `chain` matching.
+  **COR-02:** `ParsedTransfer` carries `from_address_display`/`to_address_display` (the source EIP-55 checksum
+  form), set by the etherscan/bitquery/arkham adapters; the connectors pass `display or canonical` to
+  `upsert_address` so the repository preserves the checksum in `address_display` while keying on canonical
+  (`from_address`/`to_address` stay canonical, so top-N + occurrence are unaffected). **LOG-14:** documented
+  the cross-source transfer-reconciliation limit in `schema.md §4` (content+occurrence dedup catches only
+  byte-identical encodings; the same movement encoded differently double-counts in the value views);
+  downgraded the `value_contested`-style flag to docs per the size-guard (a reliable matcher = the
+  reconciliation engine the plan scoped out). **+2 failing-first tests** (`test_adapter_fidelity.py`). **Gate
+  green: test 489 / audit 10/10 (dev) / smoke 30.** No schema change; no new deps.
+  **Batch 8 (SEC-05/16/09/15/10 casefile + CSV import hardening) — DONE.** **SEC-05 (live):** `export.py`
+  replaced `z.extractall` with `_safe_extract()` — validates member count / declared-size / per-member ratio,
+  then extracts member-by-member with a running byte budget (2 GiB ceiling) against ACTUAL inflated bytes,
+  BEFORE any hash/manifest check; a breach cleans up + raises `ValueError` → import routes 400. **SEC-16:**
+  `_reject_unsafe_member` rejects symlink/absolute/drive/`..` members. **SEC-09/15:** `read_csv` caps bytes
+  (64 MiB) + rows (1M) and maps `UnicodeDecodeError`/`csv.Error` → `ConnectorError` with a hint. **SEC-10:**
+  `_slug` prefixes Windows reserved device stems + caps to 64 chars. **+7 failing-first tests**
+  (`test_import_hardening.py`); the Tornado-sample `.casefile` still imports (export roundtrip green). **Gate
+  green: test 496 / audit 10/10 (dev) / smoke 30.** No schema change; no new deps.
+  **Batch 9 (LOG-04 + LOG-07 trace construction — CORE DONE; UI + LOG-06 deferred per size-guard).**
+  **LOG-04 (backend):** wired `POST /api/trace`, `/api/trace/{id}/{transfer,fifo,link}` in `main.py` — the
+  trace-construction service is now REACHABLE (the app can build + populate a trace via the API;
+  `/api/traces` is no longer permanently empty). **LOG-07:** `insert_trace_transfer` /
+  `insert_trace_btc_link` are insert-once (re-running FIFO / re-adding a link no longer appends duplicate
+  rows). An integration test builds a trace THROUGH the routes (create → FIFO → render) + asserts FIFO
+  idempotency. **Deferred (recorded in REMEDIATION_PLAN Batch 9, NOT dropped):** the React trace-builder UI
+  (sizable frontend effort — backend now reachable + tested) and **LOG-06** `erc20_approval` `getLogs`
+  populate (needs the UNCONFIRMED Etherscan getLogs/Approval-topic shape — a CLAUDE.md §6 STOP condition; the
+  heuristic already fails safe to a clean no-op). **+2 failing-first tests**
+  (`test_trace_build_through_route.py`). **Gate green: test 498 / audit 10/10 (dev) / smoke 30.** No schema
+  change; no new deps.
+  **Batch 10 (EFF-02/EFF-01/EFF-03 + COR-03 efficiency — minimal per fork) — DONE.** **EFF-02:** added the
+  constant `chain` to `esplora._resolve_prev_output` + `graph._seed_address_id` so both index-seek
+  (`ux_transaction`/`ux_address`) instead of full-SCAN (EXPLAIN-verified). **EFF-01 (cheap win):** the three
+  `set_label` endpoints return `{"ok": True}` — no discarded full-graph build (client refetches `/api/view`);
+  3 existing tests updated. **EFF-03:** `entities.build_merge_resolver()` batch-loads the merge forest once
+  (in-memory resolve + cycle guard) → `graph._node_summaries` N+1 removed. **COR-03:** graph USD/native
+  rollups summed as `Decimal` (exact from stored TEXT + new `_native_dec`/`_dec`), floated only at output — no
+  sub-cent drift into the report. **Deferred per fork:** node-scoping `api_node_summary` + the deep
+  `build_view` focus/hop/cap-into-SQL rewrite (same node-scoped machinery; risks the core graph view; current
+  behavior acceptable at scale). **+4 failing-first tests** (`test_efficiency_batch10.py`). **Gate green: test
+  502 / audit 10/10 (dev) / smoke 30.** No schema change; no new deps.
+  **Batch 11 (RES-03 + RES-04 write atomicity) — DONE.** **RES-03:** `write_with_provenance` promotes the
+  staged raw file with an **fsync'd rename BEFORE the RELEASE** (rolling it back on failure), so a committed
+  `source_query` never references a not-yet-promoted file; `sweep_stale_raw_tmp` (wired into case-open) clears
+  `raw_responses/*.tmp` stragglers and read-only `orphan_raw_refs` reports refs with no file (kept as a
+  case-open sweep + helper, not an 11th audit check, to preserve the 10/10 count). **RES-04:** `export_case`
+  builds the bundle at `…​.casefile.tmp` + `os.replace` after a clean close (temp cleaned on failure);
+  `write_manifest` is temp-then-rename — no truncated `.casefile`/manifest at the final name on a mid-zip
+  crash. **+5 failing-first tests** (`test_write_atomicity.py`). **Gate green: test 507 / audit 10/10 (dev) /
+  smoke 30.** No schema change; no new deps.
+  **Batch 12 (COR-04 + LOG-08 + SEC-07/08/13/14 + LOG-09 cleanup) — DONE.** **COR-04:** `link_same_address`
+  now uses `origin='heuristic-cluster'` (honest machine origin). **LOG-08:** removed dead
+  `cache_ttl_days`/`etherscan_paid_tier` config keys + corrected `schema.md §6` (no cache TTL). **SEC-07:**
+  corrected `pyproject.toml` + `THIRD_PARTY_LICENSES.md` to state igraph IS shipped (no spec/licensing change).
+  **SEC-08:** non-fatal keyring-unavailable startup banner (`launch._keyring_warning`) + keyring availability
+  is now a hard gate in `run_check` when frozen on any OS (`frozen_smoke.py` asserts on all OSes). **SEC-13:**
+  new `connectors/base.fetch_bytes()` — the OFAC intel refresh routes through it so `intel.py` drops its httpx
+  import (httpx now confined to `connectors/`); `CLAUDE.md §2` amended. **SEC-14:** shipped `requirements.lock`
+  (85 pinned deps). **LOG-09:** doc fixes — `schema.md §2/§3/§4` (confirmations +1, transfer key, 0006–0010
+  coverage + `entity.origin`), `README §5` → v6/0001–0010. **+1 failing-first test**
+  (`test_same_address_origin.py`) + `test_config.py` updated. **Gate green: test 508 / audit 10/10 (dev) /
+  smoke 30.** No schema change; no new runtime deps.
+
+- **Review-baseline remediation — R0 findings BASE-01 + BASE-02 (2026-07-01).** A multi-session code review started (R0 harness + baseline in `docs/review/`); the baseline found two reds, which the user chose to fix before the audit phases run. **(1) BASE-01 — PDF render failed although working engines were present.** Headless **Edge 149.0.4022.98 produces no PDF on this machine even for a trivial page** (environmental; root cause unverified) and `render_pdf` only ever tried the FIRST discovered engine — so every report PDF failed with a misleading "too dense" skip while Chrome 149 + Playwright sat working next to it. Fix (`services/report_render.py`): **`find_engines()`** returns every engine (Edge→Chrome, deduped — an Edge-only Linux/macOS box no longer lists one binary twice); `render_pdf` tries **all engines at 12 s, then one 40 s dense-retry each, then Playwright** (auto mode only); a **hung engine** (`subprocess.TimeoutExpired`) converts to `NoRendererError` so the chain continues; an explicit **`BIH_REPORT_RENDERER` pin is honored strictly** (no silent fallback; pin-naming error message; custom paths keep original casing for case-sensitive filesystems); `renderer_available()` mirrors `render_pdf`'s decision tree exactly. **+9 failing-first tests** (`tests/unit/test_report_render_fallback.py`). The report smoke test now passes via the Chrome fallback. `scripts/build_exhibit.py` still uses `find_engine()`'s single pick — flagged for the review track. **(2) BASE-02 — cross-run audit false alarm after schema migration.** `cases/live` (created pre-0007) failed `final-immutability` with **2,362 "final row modified"** — proven false positive: migration 0007 added `transfer.occurrence` AFTER the baseline was recorded, and the row hash covers `SELECT t.*` (verified read-only: 2,362/2,362 rows match the old baseline excluding `occurrence`, 0/2,362 including). Fix (`audits/checks/immutability.py` + `baselines.py` + `runner.py`): **schema-aware format-2 baselines** for BOTH cross-run checks — `{format:2, schema: sha256(audited tables' sqlite_master DDL), migrations: [applied yoyo ids], rows}`; schema unchanged → row compare as before; schema advanced **and** migration set strictly grew → **loud re-baseline PASS** ("cross-schema row hashes are not comparable"); schema changed with **no** new migration → **FAIL** (possible tampering); legacy baselines row-compare as before, upgrade on pass, and a legacy mismatch names the new **`--rebaseline CHECK`** runner escape hatch (`BaselineStore.discard`). Trust model unchanged (tamper-EVIDENCE — documented in the module docstring). **+6 failing-first tests** (`tests/integration/test_audit_schema_migrations.py`, incl. tamper-still-caught after every transition). `cases/live` re-baselined explicitly after the content verification (legacy sidecar preserved, SHA-256 in FINDINGS) → **10/10** (new baseline = 4,849 final rows). **Fix-diff review:** adversarial multi-agent review's verify stage died on a session limit → all 5 candidate findings **re-verified manually**; 4 real (hung-engine escape, duplicate engine discovery, `renderer_available` pin disagreement, generic pin-absent message) → fixed + tested; callers/docs swept manually (`export.py` `verify_casefile` order confirmed safe: hashes checked BEFORE audits run). **Gate green: test 457 / audit 10/10 × dev+garantex+live / smoke 30.** No schema change; no new deps. *(Review track: R1 security audit is next, against this green baseline. Still open for the R-track: BASE-03 — `case_meta.schema_version` inconsistent (5/3/1) across identically-migrated DBs, README §5 "v3" vs PROGRESS "6" all contradict the DBs; trace the writer in R2/R4.)*
 
 - **P10 — v1.0.0 release: showcase sample → secret/PII scan → license → git (2026-06-30).** Sequenced; the push is gated on a clean scan + reconciled license and (per the user) PAUSED for a final OK. **(1) Showcase sample (`scripts/build_showcase.py` + `scripts/build_exhibit.py`).** A real end-to-end run on the OFAC-sanctioned **Tornado Cash** router `0x722122dF…b6967` into `examples/Sample_Tornado_Cash/`: ingest (51 addresses / 6026 txs) → **valuation to completion riding out DeFiLlama 429s (5163/5477 priced, 314 honest no-price gaps; ~37 min)** → check intel (**Tornado anchor SANCTIONED [ofac-sdn]** + 2 attributions) → clustering (Victor deposit-reuse 0 — honest) + the **Leiden community overlay** → a curated current-view **report (HTML + PDF)** → a verified portable **`.casefile`** → an **SVG + PNG exhibit** (the README hero; rendered headlessly via OS Edge — `--screenshot` for PNG, cytoscape-svg + legacy-headless `--dump-dom` for SVG). The hero shows the red-halo'd sanctioned anchor, the dashed-violet community box ("structure, not ownership"), value-labelled "×N" aggregated edges, and dust/unpriced folds. README gained a Sample-case hero + an in-app-screenshot slot + report/casefile links. **(2) Secret/PII scan — CLEAN (the push gate).** gitleaks 8.30.1 + manual `git grep` over the tracked set + a deep scan of the committed binary artifacts (casefile DB columns + manifest + report HTML/SVG). **Found + fixed three leaks before any commit:** (a) yoyo's `_yoyo_log` embeds the OS **username + hostname** in every `case.db` → a **durable `export.py` fix** scrubs `_yoyo_log` on export (migration STATE in `_yoyo_migration` preserved; +1 regression test; the deterministic-manifest test updated to assert export *idempotency*), and the sample casefile was re-exported clean (verify=True); (b) `.claude/` agent-config (a `C:\Users\…` path) → gitignored + unstaged; (c) `scripts/build_{showcase,exhibit}.py` hardcoded a `C:\Users\TROYFO~1\…` scratch path → switched to a portable `tempfile.gettempdir()`. Confirmed **no API keys / `.env` / private keys / hardcoded credentials** in the tree and that the Bitquery (and all paid) keys are keyring-only (in fact absent from the keyring entirely); the only `Troy Folmer` occurrence is the intended README copyright line; `.gitignore` excludes `.venv`/`node_modules`/`dist`/`build`/`cases`/`__pycache__`/secrets/`*.casefile`-except-`examples/`. **(3) License reconciliation — GPL-3.0-or-later (user's call, overriding the task's MIT default).** A full dependency-license audit (`pip-licenses` + a node tally of the frontend tree) found **two copyleft RUNTIME deps**: python-igraph (**GPL-2.0-or-later**; Leiden) and cytoscape-svg (**GPL-3.0**; SVG export). GPL-3.0-or-later is the smallest license that combines both cleanly (a bare MIT would have shipped GPL under a false label); every other dep is permissive (MIT/BSD/Apache-2.0/MPL-2.0/PSF) and GPLv3-compatible, with no GPLv2-only/proprietary runtime deps. Added the **GPL-3.0 `LICENSE`** (canonical text), `THIRD_PARTY_LICENSES.md` (full breakdown incl. PyInstaller's GPL-2.0 build-tool-with-output-exception), a README §15 License notice (Copyright © 2026 Troy Folmer), and `pyproject` `license = "GPL-3.0-or-later"`. **(4) Version bump 0.9.0 → 1.0.0** so the release artifact matches the tag — `scripts/app_metadata.py` (the single source the spec + installer read) + the `bih.iss` fallback; rebuilt `dist/BIH/` (version-info **1.0.0**, `8.ico`) + `dist/installer/BIH-Setup-1.0.0.exe`, `smoke-frozen` **15/15**. **(5) Git + publish.** `git init` (branch `main`); 342 files (no `.venv`/`dist`/`cases`/`.db`/secrets); commit identity is the GitHub noreply email (no personal-email leak); the version bump was amended into the initial commit + the `v1.0.0` tag moved to it. Pushed to `github.com/troyfol/Blockchain_Investigation_Hub` + a `gh` release created (the unsigned `BIH-Setup-1.0.0.exe` attached, marked unsigned). Gates green: **test 441 / audit 10/10 / smoke 30 / smoke-frozen 15/15**; no schema change; no hardcoded hex.
 

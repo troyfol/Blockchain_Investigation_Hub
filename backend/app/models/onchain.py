@@ -75,3 +75,18 @@ class TxInput(BaseModel):
     address_id: str | None = None
     amount: str
     input_index: int
+
+
+class Erc20Approval(BaseModel):
+    """An ERC-20 ``Approval(owner, spender, value)`` event (migration 0010; LOG-06). Populated from
+    Etherscan ``getLogs`` — feeds the EVM self-authorization clustering heuristic (owner↔spender)."""
+
+    id: str = Field(default_factory=_new_id)
+    chain: str
+    owner_address_id: str
+    spender_address_id: str
+    asset_id: str | None = None  # the token contract (as an asset)
+    amount: str | None = None    # the approved allowance (base units), uint256 as text
+    block_height: int | None = None
+    tx_hash: str | None = None
+    retrieved_at: str

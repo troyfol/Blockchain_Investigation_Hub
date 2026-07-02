@@ -35,10 +35,11 @@ class ArkhamImporter(ImportConnector):
                             parse=self._parse, now=now)
 
     @staticmethod
-    def _addr(c, sqid, chain, canonical):
+    def _addr(c, sqid, chain, canonical, display=None):
         if not canonical:
             return None  # mint/burn — no counterparty address
-        return repo.upsert_address(c, Address(chain=chain, address_display=canonical), sqid)
+        # COR-02: pass the source checksum form; the repository derives the canonical key + preserves it.
+        return repo.upsert_address(c, Address(chain=chain, address_display=display or canonical), sqid)
 
     def _parse(self, c, sqid, raw_bytes, now) -> dict:
         parsed, notes = adapt_arkham_transfers(self.read_csv(raw_bytes))
@@ -69,8 +70,8 @@ class ArkhamImporter(ImportConnector):
             tx_id = repo.upsert_transaction(c, pt.transaction, sqid)
             n_tx += 1
             for tr in pt.transfers:
-                from_id = self._addr(c, sqid, tr.chain, tr.from_address)
-                to_id = self._addr(c, sqid, tr.chain, tr.to_address)
+                from_id = self._addr(c, sqid, tr.chain, tr.from_address, tr.from_address_display)
+                to_id = self._addr(c, sqid, tr.chain, tr.to_address, tr.to_address_display)
                 asset_id = repo.upsert_asset(c, tr.asset, sqid)
                 repo.upsert_transfer(c, Transfer(
                     transaction_id=tx_id, chain=tr.chain, from_address_id=from_id, to_address_id=to_id,

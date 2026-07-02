@@ -146,9 +146,9 @@ def test_trace_label_surfaces_on_edges_report_and_api(case):
         assert traces[0]["custom_label"] is True and traces[0]["btc_link_count"] == 3
 
         r = c.post(f"/api/trace/{trace_id}/label", json={"label": "Final beneficiary"})
-        assert r.status_code == 200
+        assert r.status_code == 200 and "graph" not in r.json()  # EFF-01: client refetches the view
         assert all(e["trace_name"] == "Final beneficiary"
-                   for e in r.json()["graph"]["edges"] if e["kind"] == "trace")
+                   for e in c.get("/api/graph").json()["edges"] if e["kind"] == "trace")
         assert c.post("/api/trace/ghost/label", json={"label": "x"}).status_code == 404
     finally:
         app.dependency_overrides.clear()

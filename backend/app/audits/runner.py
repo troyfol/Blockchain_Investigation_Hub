@@ -34,8 +34,15 @@ def discover_checks() -> list:
     return found
 
 
-def run_audits(db_path: str | None = None, baseline_dir: str | None = None) -> list[AuditResult]:
-    """Run all discovered checks. Opens ``db_path`` only if there is at least one check."""
+def run_audits(db_path: str | None = None, baseline_dir: str | None = None,
+               rebaseline: list[str] | None = None) -> list[AuditResult]:
+    """Run all discovered checks. Opens ``db_path`` only if there is at least one check.
+
+    ``rebaseline`` names cross-run baselines to DISCARD first (the ``--rebaseline`` escape hatch,
+    review finding BASE-02): the named check then re-establishes its baseline from current state —
+    an explicit, targeted operator action for a baseline verified stale out-of-band (e.g. recorded
+    before a schema migration rewrote an audited table). Never use it to silence an unexplained
+    failure — the discarded evidence does not come back."""
     check_fns = discover_checks()
     if not check_fns:
         return []
@@ -44,10 +51,14 @@ def run_audits(db_path: str | None = None, baseline_dir: str | None = None) -> l
         raise SystemExit("audit: checks are registered but no --db was provided")
 
     bdir = Path(baseline_dir) if baseline_dir else default_baseline_dir(db_path)
+    store = BaselineStore(bdir)
+    for name in rebaseline or []:
+        store.discard(name)
+
     ctx = AuditContext(
         conn=get_connection(db_path, create_parents=False),
         db_path=Path(db_path),
-        baselines=BaselineStore(bdir),
+        baselines=store,
     )
     results: list[AuditResult] = []
     try:
@@ -93,9 +104,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="dir for cross-run audit baselines (default: <db parent>/.audit_baselines)",
     )
+    parser.add_argument(
+        "--rebaseline",
+        action="append",
+        default=None,
+        metavar="CHECK",
+        help="discard the named cross-run baseline before running so the check re-establishes it "
+             "(explicit operator re-baseline after verifying a stale baseline, e.g. one recorded "
+             "before a schema migration; repeatable)",
+    )
     args = parser.parse_args(argv)
 
-    results = run_audits(args.db, args.baseline_dir)
+    for name in args.rebaseline or []:
+        print(f"audit: discarding baseline {name!r} for explicit re-baseline (operator request)")
+
+    results = run_audits(args.db, args.baseline_dir, rebaseline=args.rebaseline)
     ok = _print_report(results)
     return 0 if ok else 1
 

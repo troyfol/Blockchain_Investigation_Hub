@@ -26,7 +26,7 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 from ..theme import dimension
-from .entities import resolve
+from .entities import build_merge_resolver
 
 # Edge width is scaled (log) by value between these bounds so dominant flows pop without dwarfing the
 # rest. The bounds + the unpriced baseline are CATALOG SIZING TOKENS (overridable; the P6 customize UI
@@ -152,9 +152,12 @@ def aggregate_parallel_edges(edges: list[dict]) -> list[dict]:
             out.append(members[0])
             continue
         count = len(members)
-        total_native = round(sum(m.get("value_num") or 0.0 for m in members), 8)
+        # COR-03: sum the parallel-edge display totals in Decimal (over the members' exact values), then
+        # quantize + float once, so the aggregated USD/native shown on the report never drifts sub-cent.
+        total_native = float(round(sum((_dec(m.get("value_num")) for m in members), Decimal(0)), 8))
         priced = [m for m in members if m.get("value_usd") is not None]
-        total_usd = round(sum(m["value_usd"] for m in priced), 2) if priced else None
+        total_usd = (float(round(sum((_dec(m["value_usd"]) for m in priced), Decimal(0)), 2))
+                     if priced else None)
         sym = None if asset == "?" else asset
         times = f" ×{count:,}"  # the ×N count baked into the value label so the canvas AND the report's
         # Python cytoscape twin both show it with no stylesheet change (the value_label/value_usd_label rules).
@@ -229,6 +232,27 @@ def _fmt_amount(amount: str | None, decimals: int | None, symbol: str | None) ->
     return (f"{s} {symbol}" if symbol else s), float(v)
 
 
+def _dec(x) -> Decimal:
+    """Coerce a display number to Decimal for exact summation (COR-03); None/bad → Decimal(0)."""
+    if x is None:
+        return Decimal(0)
+    try:
+        return Decimal(str(x))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(0)
+
+
+def _native_dec(amount: str | None, decimals: int | None) -> Decimal:
+    """The EXACT native amount as a Decimal (COR-03) — for summed display rollups that must not accumulate
+    float sub-unit drift. Returns Decimal(0) on bad input (mirrors _fmt_amount's guard)."""
+    if amount is None or decimals is None:
+        return Decimal(0)
+    try:
+        return Decimal(amount) / (Decimal(10) ** int(decimals))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(0)
+
+
 def _seed_address_id(conn) -> str | None:
     """The seed/anchor: the address the investigation started from = the address of the EARLIEST
     address-scoped acquisition (get_transactions/get_balance). Best-effort; None if undeterminable."""
@@ -236,13 +260,21 @@ def _seed_address_id(conn) -> str | None:
         "SELECT params FROM source_query WHERE capability IN ('get_transactions','get_balance') "
         "ORDER BY requested_at, id").fetchall():
         try:
-            addr = (json.loads(r["params"]) or {}).get("address") if r["params"] else None
+            params = json.loads(r["params"]) or {} if r["params"] else {}
         except (TypeError, ValueError):
-            addr = None
-        if addr:
+            params = {}
+        addr = params.get("address")
+        if not addr:
+            continue
+        # EFF-02: constrain chain so ux_address(chain, address) is used as an indexed seek (a bare
+        # `WHERE address=?` full-SCANs the address table). The chain rides in the same params.
+        chain = params.get("chain")
+        if chain:
+            row = conn.execute("SELECT id FROM address WHERE chain=? AND address=?", (chain, addr)).fetchone()
+        else:
             row = conn.execute("SELECT id FROM address WHERE address=?", (addr,)).fetchone()
-            if row:
-                return row["id"]
+        if row:
+            return row["id"]
     return None
 
 
@@ -287,10 +319,11 @@ def _node_summaries(conn) -> dict:
     coinjoin: set[str] = set()
     entity_label: dict[str, str] = {}
     groups: dict[str, dict] = {}
+    resolve_terminal = build_merge_resolver(conn)  # EFF-03: batch-load the merge forest once (no N+1)
     for m in conn.execute(
         "SELECT m.address_id, m.entity_id, m.flags, e.name, e.origin "
         "FROM entity_membership m JOIN entity e ON e.id=m.entity_id").fetchall():
-        rid = resolve(conn, m["entity_id"])             # follow merged_into to the canonical entity
+        rid = resolve_terminal(m["entity_id"])          # follow merged_into to the canonical entity
         g = groups.setdefault(rid, {"members": set(), "name": None, "origin": m["origin"]})
         g["members"].add(m["address_id"])
         if m["name"] and not g["name"]:
@@ -372,7 +405,28 @@ def _flag_address_poisoning(nodes: dict, edges: list) -> int:
     return flagged
 
 
-def build_graph(conn, *, aggregate: bool = True) -> dict:
+def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = None) -> dict:
+    """Build the paradigm-agnostic ``{nodes, edges}`` read model.
+
+    ``focus_incident`` (EFF-01): a node id (``addr:<id>`` / ``tx:<id>``). When set, the two O(case) scans
+    (``v_value_movement`` + ``tx_input``) are bounded to the rows INCIDENT to that node — so the node's
+    neighborhood (it + its counterparties + their edges) is built with the SAME node/edge/label/flag/
+    aggregation logic, but without materializing the whole case. Used by the per-click node summary."""
+    # Resolve the incidence filter once — the movement/input scans below constrain to these rows.
+    _mv_where, _mv_params, _in_where, _in_params = "", (), "", ()
+    if focus_incident:
+        kind, _, ident = focus_incident.partition(":")
+        if kind == "addr":
+            _mv_where = " WHERE m.src_address_id=? OR m.dst_address_id=?"
+            _mv_params = (ident, ident)
+            _in_where = " WHERE i.address_id=?"
+            _in_params = (ident,)
+        elif kind == "tx":
+            _mv_where = " WHERE m.transaction_id=?"
+            _mv_params = (ident,)
+            _in_where = " WHERE i.transaction_id=?"
+            _in_params = (ident,)
+
     # Batch-load once; FK + the no-dangling-fk audit guarantee referenced rows exist.
     addr_rows = {r["id"]: r for r in conn.execute(
         "SELECT id, chain, address, address_display FROM address").fetchall()}
@@ -399,12 +453,18 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
     # representative figure per movement (highest confidence) for the DISPLAY value + width; a movement
     # valued by >1 source is flagged `value_contested` (the claims themselves stay side-by-side in the DB —
     # this is a display number over real claims, never a collapse, Inv #4). No valuation => no USD (gap).
-    usd_by_mv: dict[str, float] = {}
+    # COR-03: keep the display USD as Decimal (the stored `valuation.value` is exact Decimal TEXT) so the
+    # per-node + aggregate rollups summed below preserve exactness into the court-facing report, rather
+    # than accumulating float sub-cent drift. Converted to float only at JSON output (quantized).
+    usd_by_mv: dict[str, Decimal] = {}
     _vconf: dict[str, float] = {}
     usd_count: dict[str, int] = {}
     for r in conn.execute("SELECT subject_id, value, confidence FROM valuation").fetchall():
         sid = r["subject_id"]
-        v = float(r["value"])
+        try:
+            v = Decimal(r["value"])
+        except (InvalidOperation, TypeError):
+            continue
         conf = r["confidence"] if r["confidence"] is not None else 0.0
         usd_count[sid] = usd_count.get(sid, 0) + 1
         if sid not in usd_by_mv or conf > _vconf[sid] or (conf == _vconf[sid] and v > usd_by_mv[sid]):
@@ -429,10 +489,10 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
 
     # Per-node value summary accumulators (received / sent): USD-at-time across all valued assets, plus the
     # chain-native amount (the "X BTC / Y ETH" figure). Display-only aggregates over the real movements.
-    in_usd: dict[str, float] = defaultdict(float)
-    out_usd: dict[str, float] = defaultdict(float)
-    in_nat: dict[str, float] = defaultdict(float)
-    out_nat: dict[str, float] = defaultdict(float)
+    in_usd: dict[str, Decimal] = defaultdict(Decimal)   # COR-03: Decimal-exact rollups (float only at output)
+    out_usd: dict[str, Decimal] = defaultdict(Decimal)
+    in_nat: dict[str, Decimal] = defaultdict(Decimal)
+    out_nat: dict[str, Decimal] = defaultdict(Decimal)
 
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
@@ -507,7 +567,7 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
             nodes[nid] = tnode
         return nid
 
-    for m in conn.execute("SELECT * FROM v_value_movement").fetchall():
+    for m in conn.execute("SELECT * FROM v_value_movement m" + _mv_where, _mv_params).fetchall():
         symbol, decimals = asset_by_id.get(m["asset_id"], (None, None))
         value_label, value_num = _fmt_amount(m["amount"], decimals, symbol)
         mid = m["movement_id"]
@@ -519,10 +579,11 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
             if m["src_address_id"]:
                 out_usd[m["src_address_id"]] += usd
         if m["asset_id"] in native_asset_ids and value_num:
+            nat_dec = _native_dec(m["amount"], decimals)  # COR-03: exact native for the summed rollups
             if m["dst_address_id"]:
-                in_nat[m["dst_address_id"]] += value_num
+                in_nat[m["dst_address_id"]] += nat_dec
             if m["src_address_id"]:
-                out_nat[m["src_address_id"]] += value_num
+                out_nat[m["src_address_id"]] += nat_dec
         ev = {"id": f"mv:{mid}", "amount": m["amount"], "value_label": value_label,
               "value_num": value_num, "asset_symbol": symbol, "finality_status": m["finality_status"],
               **_seq_fields(m["transaction_id"])}  # the movement's tx block_height (ordering key)
@@ -530,7 +591,7 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
         # view rank/size/threshold a movement by NATIVE amount when it has no USD price (P8.6 "unpriced ≠
         # dust") and power the USD<->native display toggle — per-asset (native isn't cross-asset comparable).
         if usd is not None:
-            ev["value_usd"] = round(usd, 2)
+            ev["value_usd"] = float(round(usd, 2))  # COR-03: Decimal internally, float only at output
             ev["value_usd_label"] = _usd(usd)
             if mid in contested:
                 ev["value_contested"] = True  # >1 source priced it — see the node detail, not collapsed
@@ -566,13 +627,14 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
     # always native BTC (no asset_id column on tx_input) — format with the chain's native asset.
     for i in conn.execute(
         "SELECT i.id, i.transaction_id, i.address_id, i.amount, t.finality_status, t.chain "
-        "FROM tx_input i JOIN transaction_ t ON t.id=i.transaction_id"
+        "FROM tx_input i JOIN transaction_ t ON t.id=i.transaction_id" + _in_where, _in_params
     ).fetchall():
         tx = transaction_node(i["transaction_id"])
         symbol, decimals = native_by_chain.get(i["chain"], (None, None))
         value_label, value_num = _fmt_amount(i["amount"], decimals, symbol)
         if i["address_id"] and value_num:
-            out_nat[i["address_id"]] += value_num  # an input address spends native (no USD priced on inputs)
+            # an input address spends native (no USD priced on inputs). COR-03: sum exact Decimal.
+            out_nat[i["address_id"]] += _native_dec(i["amount"], decimals)
         edges.append({"id": f"in:{i['id']}", "source": endpoint(i["address_id"]), "target": tx,
                       "kind": "tx_input", "paradigm": "utxo", "amount": i["amount"],
                       "value_label": value_label, "value_num": value_num, "asset_symbol": symbol,
@@ -631,8 +693,11 @@ def build_graph(conn, *, aggregate: bool = True) -> dict:
         if node.get("kind") != "address":
             continue
         aid = nid[len("addr:"):]
-        iv, ov = round(in_usd.get(aid, 0.0), 2), round(out_usd.get(aid, 0.0), 2)
-        ina, outa = round(in_nat.get(aid, 0.0), 8), round(out_nat.get(aid, 0.0), 8)
+        # COR-03: quantize the Decimal-exact rollups once, then float for JSON output.
+        iv = float(round(in_usd.get(aid, Decimal(0)), 2))
+        ov = float(round(out_usd.get(aid, Decimal(0)), 2))
+        ina = float(round(in_nat.get(aid, Decimal(0)), 8))
+        outa = float(round(out_nat.get(aid, Decimal(0)), 8))
         if iv or ov or ina or outa:
             sym = native_by_chain.get(node.get("chain"), (None, None))[0]
             node["val"] = {"in_usd": iv or None, "out_usd": ov or None,

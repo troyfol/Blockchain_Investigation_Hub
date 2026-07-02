@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blockchain-investigation-hub"
-version = "0.0.0"
+version = "1.2.0"
 description = "Provenance-first integration-and-reporting hub for blockchain investigations"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,9 +38,12 @@ dev = [
 app = [
     "pywebview>=5.3",
 ]
-# P8.8 Leiden community detection (Traag 2019). OPTIONAL + import-guarded: igraph is GPL-licensed, so it is
-# invoked at runtime (never bundled into a redistributed binary) and the community overlay degrades to a
-# clear "unavailable" note when absent. `pip install -e .[clustering]` enables the visual community lens.
+# P8.8 Leiden community detection (Traag 2019). Import-guarded: the community overlay degrades to a clear
+# "unavailable" note when igraph is absent. igraph is GPL-2.0-or-later — compatible with this project's
+# GPL-3.0 and disclosed in THIRD_PARTY_LICENSES.md. NOTE (SEC-07, corrected R6-2026-07-02): igraph IS
+# bundled into the shipped one-folder build (`bih.spec` does not exclude it, and `collect_submodules
+# ("backend")` sweeps the unconditional in-function `import igraph`), so it is a SHIPPED runtime dep, not a
+# never-bundled optional extra. `pip install -e .[clustering]` installs it for a source checkout.
 clustering = [
     "igraph>=0.11",
 ]

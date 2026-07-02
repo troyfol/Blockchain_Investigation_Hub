@@ -51,6 +51,16 @@ class BaselineStore:
     def exists(self, name: str) -> bool:
         return self._path(name).exists()
 
+    def discard(self, name: str) -> bool:
+        """Delete the stored baseline for ``name`` — an EXPLICIT operator re-baseline (the runner's
+        ``--rebaseline`` flag; review finding BASE-02). The next run of the owning check
+        re-establishes it from current state. Returns whether a baseline existed."""
+        path = self._path(name)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
 
 def default_baseline_dir(db_path: str | Path) -> Path:
     """The conventional baseline directory for a given case DB."""

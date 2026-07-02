@@ -89,9 +89,13 @@ class EsploraConnector(BaseHttpConnector):
         """If the spent output is in this DB, return its id and mark it spent (linkage refresh)."""
         if prev_txid is None or prev_vout is None:
             return None
+        # EFF-02: constrain the (constant, known) chain so ux_transaction(chain, tx_hash) is used as an
+        # indexed seek — without it, `WHERE tx_hash=?` alone can't use the index (leftmost col = chain)
+        # and SQLite full-SCANs tx_output per input (O(inputs × |tx_output|) on a BTC-heavy re-ingest).
         row = conn.execute(
             "SELECT o.id FROM tx_output o JOIN transaction_ t ON t.id=o.transaction_id "
-            "WHERE t.tx_hash=? AND o.output_index=?", (prev_txid, prev_vout)).fetchone()
+            "WHERE t.chain='bitcoin' AND t.tx_hash=? AND o.output_index=?",
+            (prev_txid, prev_vout)).fetchone()
         if not row:
             return None
         conn.execute("UPDATE tx_output SET spent=1, spending_tx_id=? WHERE id=?", (spending_tx_id, row["id"]))
@@ -108,7 +112,7 @@ class EsploraConnector(BaseHttpConnector):
         # tx is streamed before the funding tx it draws on — surfaced by the Colonial Pipeline case.)
         written = []
         for pt in parsed:
-            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid)
+            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid, authoritative=True)
             n_tx += 1
             for o in pt.outputs:
                 repo.upsert_tx_output(conn, TxOutput(
@@ -147,8 +151,21 @@ class EsploraConnector(BaseHttpConnector):
                          params=params, requested_at=now, completed_at=now,
                          status="partial" if partial else "ok",
                          result_summary=f"{len(txs)} txs" + (f"; skipped bounds {skipped}" if skipped else ""))
-        _, res = write_with_provenance(
-            conn, sq, lambda c, sqid: self._write_btc(c, sqid, chain, parsed), raw_response=payloads)
+        # COR-01: a COMPLETE re-fetch (not bounded/partial) whose fresh set omits a stored PROVISIONAL tx
+        # means that tx was reorged/replaced — sweep it (+ children) under this fetch's source_query. A
+        # partial page legitimately omits txs, so the sweep is gated on `not partial`.
+        present = {pt.transaction.tx_hash for pt in parsed}
+
+        def _writer(c, sqid):
+            res = self._write_btc(c, sqid, chain, parsed)
+            if not partial:
+                swept = repo.sweep_reorged_provisional(
+                    c, chain=chain, address=address, present_tx_hashes=present, source_query_id=sqid)
+                if swept["deleted"] or swept["skipped_referenced"]:
+                    res["reorged"] = swept
+            return res
+
+        _, res = write_with_provenance(conn, sq, _writer, raw_response=payloads)
         return res
 
     def get_transfers(self, conn, chain: str, txid: str) -> dict:

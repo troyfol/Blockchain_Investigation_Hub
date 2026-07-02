@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
 import tempfile
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .config import get_settings
@@ -33,6 +36,48 @@ logger = logging.getLogger("bih.api")
 configure_frozen_runtime()
 
 app = FastAPI(title="Blockchain Investigation Hub", version="0.0.0")
+
+# R6 Batch 2 (SEC-02/SEC-04): reject non-loopback Host (DNS-rebinding) + cross-origin state-changing
+# requests (CSRF). The API is single-user/local with no auth, so request-provenance is its only defense
+# against a hostile browser page.
+from .middleware import RequestProvenanceMiddleware  # noqa: E402
+
+app.add_middleware(RequestProvenanceMiddleware)
+
+
+# R6 Batch 5 — the "never a raw 500 / no key-bearing traceback" error boundary (SEC-03 / RES-02).
+# Targeted handlers only (no blanket `Exception` catch-all, which would mask real bugs + change test
+# semantics); the key-leak vector itself is closed at the source in `connectors/base.py` (4xx →
+# sanitized UpstreamError). These are the defense-in-depth net for any route that doesn't catch locally.
+
+@app.exception_handler(sqlite3.OperationalError)
+async def _sqlite_operational_handler(request: Request, exc: sqlite3.OperationalError):
+    """RES-02: a write that lost the WAL `busy_timeout` race raises `database is locked` — return a clean,
+    retryable 503 (never a raw 500 + traceback). Any other OperationalError → a generic sanitized 500."""
+    msg = str(exc).lower()
+    if "locked" in msg or "busy" in msg:
+        logger.warning("db busy on %s %s — returning 503", request.method, request.url.path)
+        return JSONResponse(status_code=503, content={"detail": "the case database is busy — retry in a moment"},
+                            headers={"Retry-After": "1"})
+    logger.error("sqlite OperationalError on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(status_code=500, content={"detail": "a database error occurred"})
+
+
+@app.exception_handler(httpx.HTTPStatusError)
+async def _httpx_status_handler(request: Request, exc: httpx.HTTPStatusError):
+    """SEC-03 backstop: an httpx.HTTPStatusError (whose message embeds the key-bearing request URL) must
+    NEVER reach the default 500 logger. Log only the status + type, respond with a clean 502."""
+    code = exc.response.status_code if exc.response is not None else "?"
+    logger.warning("upstream HTTP %s on %s %s (sanitized)", code, request.method, request.url.path)
+    return JSONResponse(status_code=502, content={"detail": "an upstream data source returned an error"})
+
+
+@app.exception_handler(ConnectorError)
+async def _connector_error_handler(request: Request, exc: ConnectorError):
+    """Defense-in-depth: a sanitized ConnectorError/UpstreamError a route didn't catch stays a clean 502
+    (its message is already key-free), not a 500."""
+    logger.warning("connector error on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(status_code=502, content={"detail": "an upstream data source failed — try again"})
 
 
 # --- dependencies --------------------------------------------------------------------------
@@ -188,7 +233,9 @@ def api_node_summary(node_id: str, conn=Depends(get_case_conn)) -> dict:
     incident facts (not just the focused view)."""
     from .services.graph import build_graph as _bg
 
-    g = _bg(conn)
+    # EFF-01: build only the node's neighborhood (incident movements/inputs), not the whole case — the
+    # aggregation below is unchanged, so the summary is identical to the full-graph result, just cheaper.
+    g = _bg(conn, focus_incident=node_id)
     nodes = {n["id"]: n for n in g["nodes"]}
     if node_id not in nodes:
         raise HTTPException(status_code=404, detail="node not found")
@@ -290,10 +337,14 @@ def api_open_case(body: OpenCaseBody) -> dict:
     Surfaces ``migrated`` so the UI can note a forward migration ran on open."""
     from .services import cases
 
+    from .db import SchemaTooNewError
+
     try:
         res = cases.open_case(body.path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except SchemaTooNewError as exc:  # LOG-03: a case created by a newer app version
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, "migrated": res["migrated"], "active": cases.active_meta(), "path": res["path"]}
@@ -331,6 +382,8 @@ def api_import_case(body: ImportCaseBody) -> dict:
         out = cases.import_casefile(body.path, allow_untrusted=body.allow_untrusted)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:  # SEC-05: an oversized/unsafe bundle rejected before inflating
+        raise HTTPException(status_code=400, detail=str(exc))
     return _import_result(out)
 
 
@@ -349,6 +402,8 @@ async def api_import_case_upload(request: Request, filename: str = "imported.cas
     tmp.write_bytes(data)
     try:
         out = cases.import_casefile(tmp, allow_untrusted=allow_untrusted)
+    except ValueError as exc:  # SEC-05: an oversized/unsafe bundle rejected before inflating
+        raise HTTPException(status_code=400, detail=str(exc))
     finally:
         try:
             tmp.unlink()
@@ -681,7 +736,7 @@ def api_target_set_label(target_type: str, target_id: str, body: LabelBody,
         # an unknown target id (poly ref would dangle) vs a bad/empty label
         code = 404 if "not found" in str(exc) else 400
         raise HTTPException(status_code=code, detail=str(exc))
-    return {"ok": True, "graph": build_graph(conn)}
+    return {"ok": True}  # EFF-01: the client refetches /api/view; never build a full graph it discards
 
 
 # --- Findings & Notes composer -------------------------------------------------------------
@@ -798,7 +853,7 @@ def api_set_address_label(address_id: str, body: LabelBody, conn=Depends(get_cas
         set_label(conn, target_type="address", target_id=address_id, label=body.label)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "graph": build_graph(conn)}
+    return {"ok": True}  # EFF-01: the client refetches /api/view; never build a full graph it discards
 
 
 @app.get("/api/traces")
@@ -818,6 +873,100 @@ def api_traces(conn=Depends(get_case_conn)) -> dict:
     return {"traces": out}
 
 
+# --- trace CONSTRUCTION (R6 Batch 9 / LOG-04) — build + populate a trace through the API ------------
+# Traces are investigator constructions (Family C, provenance-exempt by schema design). These endpoints
+# make the trace-construction service reachable so the shipped app can actually BUILD a trace (list +
+# rename + render already existed); previously `/api/traces` was permanently empty. FIFO/manual-link
+# writers are insert-once (LOG-07), so re-running is safe.
+
+class NewTraceBody(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TraceTransferBody(BaseModel):
+    transfer_id: str
+    ordering: int | None = None
+    note: str | None = None
+
+
+class TraceFifoBody(BaseModel):
+    transaction_id: str
+    ordering_start: int = 0
+
+
+class TraceLinkBody(BaseModel):
+    transaction_id: str
+    source_output_id: str
+    dest_output_id: str
+    confidence: float | None = None
+    ordering: int | None = None
+    note: str | None = None
+
+
+def _require_trace(conn, trace_id: str) -> None:
+    if conn.execute("SELECT 1 FROM trace WHERE id=?", (trace_id,)).fetchone() is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+
+
+@app.post("/api/trace")
+def api_create_trace(body: NewTraceBody, conn=Depends(get_case_conn)) -> dict:
+    """Create a named trace (empty). Populate it via /transfer (EVM edge), /fifo (BTC apportionment),
+    or /link (investigator BTC link)."""
+    from .services.tracing import create_trace
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="a trace needs a non-empty name")
+    trace_id = create_trace(conn, name=name, description=body.description)
+    return {"ok": True, "trace_id": trace_id}
+
+
+@app.post("/api/trace/{trace_id}/transfer")
+def api_trace_add_transfer(trace_id: str, body: TraceTransferBody, conn=Depends(get_case_conn)) -> dict:
+    """Add an EVM edge (a real `transfer` fact) to a trace. Insert-once on (trace, transfer)."""
+    from .services.tracing import add_trace_transfer
+
+    _require_trace(conn, trace_id)
+    try:
+        tt_id = add_trace_transfer(conn, trace_id=trace_id, transfer_id=body.transfer_id,
+                                   ordering=body.ordering, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "trace_transfer_id": tt_id}
+
+
+@app.post("/api/trace/{trace_id}/fifo")
+def api_trace_fifo(trace_id: str, body: TraceFifoBody, conn=Depends(get_case_conn)) -> dict:
+    """Apportion one Bitcoin transaction by the FIFO convention into `trace_btc_link(basis='fifo')` rows
+    (a labeled convention, never ground-truth flow). Re-running is a no-op (LOG-07)."""
+    from .services.tracing import fifo_trace_transaction
+
+    _require_trace(conn, trace_id)
+    try:
+        res = fifo_trace_transaction(conn, trace_id=trace_id, transaction_id=body.transaction_id,
+                                     ordering_start=body.ordering_start)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **res}
+
+
+@app.post("/api/trace/{trace_id}/link")
+def api_trace_add_link(trace_id: str, body: TraceLinkBody, conn=Depends(get_case_conn)) -> dict:
+    """Add an investigator-asserted Bitcoin link (`basis='investigator'`) within one transaction."""
+    from .services.tracing import add_manual_link
+
+    _require_trace(conn, trace_id)
+    try:
+        link_id = add_manual_link(conn, trace_id=trace_id, transaction_id=body.transaction_id,
+                                  source_output_id=body.source_output_id,
+                                  dest_output_id=body.dest_output_id, confidence=body.confidence,
+                                  ordering=body.ordering, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "trace_btc_link_id": link_id}
+
+
 @app.post("/api/trace/{trace_id}/label")
 def api_set_trace_label(trace_id: str, body: LabelBody, conn=Depends(get_case_conn)) -> dict:
     """Name/relabel a trace/path (feature 5). Persisted as an investigator label; the report + graph use
@@ -830,7 +979,7 @@ def api_set_trace_label(trace_id: str, body: LabelBody, conn=Depends(get_case_co
         set_label(conn, target_type="trace", target_id=trace_id, label=body.label)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "graph": build_graph(conn)}
+    return {"ok": True}  # EFF-01: the client refetches /api/view; never build a full graph it discards
 
 
 class ExpandRequest(BaseModel):
@@ -1189,6 +1338,40 @@ def api_clustering_undo(body: ClusteringUndoBody, conn=Depends(get_case_conn)) -
     """Undo a clustering RUN as a unit: retract every still-active membership it wrote (append-only)."""
     from .services.clustering import service as clustering
     return {"ok": True, **clustering.undo_run(conn, body.source_query_id)}
+
+
+class ApprovalsFetchBody(BaseModel):
+    address: str
+    chain: str = "ethereum"
+    bounds: dict | None = None
+
+
+@app.post("/api/approvals/fetch")
+def api_fetch_approvals(body: ApprovalsFetchBody, conn=Depends(get_case_conn)) -> dict:
+    """LOG-06: fetch the ERC-20 Approval events where ``address`` is the owner (Etherscan getLogs) and write
+    ``erc20_approval`` rows — the data the EVM self-authorization heuristic needs. Then run the heuristic via
+    /api/clustering/apply (name='evm-self-authorization'). Clean errors (never a raw 500); offline/no-key
+    guarded like ingest."""
+    from .connectors.etherscan import CHAIN_TO_CHAINID, EtherscanConnector
+    from .secrets import get_secret
+    from .services.settings_store import is_offline
+
+    if body.chain.lower() not in CHAIN_TO_CHAINID:
+        raise HTTPException(status_code=400, detail=f"{body.chain!r} is not an EVM chain with approval logs")
+    if is_offline():
+        return {"error": "Offline mode is on — turn it off to fetch approvals.", "offline": True}
+    key = get_secret("etherscan")
+    if not key:
+        return {"error": "Fetching approvals needs a free Etherscan API key — add one in Settings → "
+                         "Connectors (Etherscan).", "needs_key": "etherscan"}
+    connector = EtherscanConnector(api_key=key, settings=get_settings())
+    try:
+        res = connector.get_erc20_approvals(conn, body.chain, body.address, body.bounds or {})
+    except (ConnectorError, ValueError) as exc:
+        return {"error": str(exc)}
+    finally:
+        connector.close()
+    return {"ok": True, **res}
 
 
 # --- frontend (one-click packaging) --------------------------------------------------------

@@ -5,6 +5,11 @@ one-click launcher there is a single origin: FastAPI serves the built SPA (``fro
 ``/`` and the API at ``/api`` — so the frontend's relative ``fetch("/api/graph")`` works with no
 proxy and no CORS. Mounting is a no-op when the build is absent (e.g. CI without ``npm run build``),
 so importing the app never requires a frontend build.
+
+Note (SEC-17): "single origin, no CORS" removes the app's *own* need to relax CORS; it is NOT a
+cross-site defense. A hostile page can still issue cross-site requests to the loopback API — the actual
+request-provenance defense (loopback ``Host`` allowlist + Origin/Referer check on state-changing methods)
+lives in ``middleware.RequestProvenanceMiddleware`` (Batch 2 / SEC-02/SEC-04), not here.
 """
 
 from __future__ import annotations

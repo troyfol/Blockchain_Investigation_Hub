@@ -20,7 +20,7 @@ from .investigator import (
     TraceBtcLink,
     TraceTransfer,
 )
-from .onchain import Address, Asset, Transaction, Transfer, TxInput, TxOutput
+from .onchain import Address, Asset, Erc20Approval, Transaction, Transfer, TxInput, TxOutput
 from .provenance import Exhibit, SourceQuery
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "Transfer",
     "TxInput",
     "TxOutput",
+    "Erc20Approval",
     # sourced claims + entities (Family B)
     "Attribution",
     "RiskAssessment",

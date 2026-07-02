@@ -196,7 +196,7 @@ before valuation finishes says so (`Valuation in progress at generation: M of N 
 **Build the desktop app (a standalone exe — no Python install needed).**
 
 ```bash
-make package         # npm run build, then PyInstaller bih.spec -> dist/BIH/ (windowed, ~46 MB)
+make package         # npm run build, then PyInstaller bih.spec -> dist/BIH/ (windowed, ~55 MB)
 make package-debug   # same, but a console build that prints tracebacks (debugging a frozen failure)
 make smoke-frozen    # run the built exe headlessly and assert the frozen DoD gate (15 checks)
 ```
@@ -310,7 +310,7 @@ choices:
 ## 5. Data model (schema)
 
 SQLite, created by forward-only `yoyo` migrations under `backend/app/migrations/` (`schema_version` in
-`case_meta`; currently **v3**, migrations `0001`–`0007`). Canonical Pydantic shapes in
+`case_meta`; currently **v6**, migrations `0001`–`0010`). Canonical Pydantic shapes in
 `backend/app/models/`. Repository (idempotent upserts + append-only inserts + final-row freeze):
 `backend/app/db/repository.py`.
 
@@ -469,9 +469,10 @@ panel (preview → apply → undo). **CoinJoin gating** applies throughout: a pr
     **exact** received amount into a common aggregator (`agg_min = 2`; aggregator not an exchange/DEX) are one
     entity; entities capped at ≤1000 addresses.
   - **Self-authorization.** An ERC-20 `Approval(owner, spender)` with both active EOAs (exchange spenders
-    removed; bounded ≤10 each way) links owner↔spender. **Data-gated:** BIH's Etherscan connector fetches
-    Transfer events only — Approval events are not ingested, so this reads the `erc20_approval` table (explicit
-    import) and is a clean no-op when empty (an honest "no approval data" result, never a fabricated link).
+    removed; bounded ≤10 each way) links owner↔spender. **Data-gated:** the default Etherscan pull fetches
+    Transfer events only, so this reads the `erc20_approval` table — populated on demand via
+    `POST /api/approvals/fetch` (Etherscan `getLogs`, `topic0` = the `Approval` event) or a structured import —
+    and is a clean no-op when empty (an honest "no approval data" result, never a fabricated link).
 
 - **Community detection — Leiden; Traag, Waltman & van Eck, "From Louvain to Leiden" (Sci. Rep. 2019)**
   (`arxiv 1810.08473`). **VISUAL STRUCTURE ONLY — never an ownership claim, never persisted.** A community is
@@ -519,30 +520,29 @@ of the named module. **Write the change down — it changes what "final" and "va
    optimism/base **20** (L1-settlement proxy), polygon **128** (Heimdall v2 makes this over-conservative —
    a documented policy knob). Override via `BIH_FINALITY_THRESHOLDS` JSON (merged onto defaults so the
    settled bitcoin/ethereum can't be dropped).
-2. **Claim/cache TTL** — default 30 days (`BIH_CACHE_TTL_DAYS`).
-3. **Expansion bounds** — `block_range`, `time_window`, `min_value`, `top_n_counterparties`, `max_pages`,
+2. **Expansion bounds** — `block_range`, `time_window`, `min_value`, `top_n_counterparties`, `max_pages`,
    `direction`. Absent = connector default (recorded in `source_query`); a truncating bound marks the
    query `partial`. Bounds limit *acquisition*, never delete already-ingested facts.
-4. **Valuation precision** — `Decimal`, `ROUND_HALF_EVEN`, 18 fractional places, price at the block ts
+3. **Valuation precision** — `Decimal`, `ROUND_HALF_EVEN`, 18 fractional places, price at the block ts
    (`normalization/valuation_math.py`). Missing price ⇒ no row.
-5. **CoinJoin / heuristic-confidence** (`services/entities.py`): `K_INPUTS=5`, `K_EQUAL_OUTPUTS=5`,
+4. **CoinJoin / heuristic-confidence** (`services/entities.py`): `K_INPUTS=5`, `K_EQUAL_OUTPUTS=5`,
    Whirlpool denominations; co-spend confidence 0.9, CoinJoin-flagged 0.5, same-address 0.3 (never across
    the EVM/Bitcoin boundary).
-6. **Paid connectors** — off by default; enable with `BIH_<NAME>_ENABLED=1` **and** a keyring key (see §7).
-7. **In-app Settings UI** (header → **Settings**) — the runtime way to tune the above without env vars:
+5. **Paid connectors** — off by default; enable with `BIH_<NAME>_ENABLED=1` **and** a keyring key (see §7).
+6. **In-app Settings UI** (header → **Settings**) — the runtime way to tune the above without env vars:
    toggle each paid connector and paste its API key (written **straight to the OS keyring**, write-only —
    the UI only ever shows *key set ✓ / no key*, never the value), change the **cases folder** (where new
    cases are created), and flip **offline mode**. **Offline mode** makes connectors refuse all outbound
    calls — ingest/expand are disabled and the app works only on already-ingested data; the graph, claims,
    reports, and export keep working. The panel shows a loud banner if no OS keyring backend is available,
    or if `BIH_ALLOW_PLAINTEXT_KEYS=1` is active (secrets read from env, not the keyring).
-8. **Canvas theme** (header switcher: **Dark · Light · Custom**) — switch the on-screen palette instantly
+7. **Canvas theme** (header switcher: **Dark · Light · Custom**) — switch the on-screen palette instantly
    (the choice persists). **Custom** is the editable preset: the 🎨 **Customize** drawer gives every graph
    color a picker with a live canvas preview, per-token reset, and "Reset Custom to defaults" (back to the
    Neo-Tokyo palette); **Dark** and **Light** are locked modern themes. **Reports and exhibit image exports
    always render the print-light palette** regardless of the canvas theme, so case files stay paper-legible.
    Every color is a catalog token (`frontend/src/theme/tokens.json`) — no hardcoded hex anywhere.
-9. **Data locations** (where your user data lives — registry of recent cases, `settings.json`, the
+8. **Data locations** (where your user data lives — registry of recent cases, `settings.json`, the
    single-instance lock, logs, and the default folder for NEW cases). **Installed:** the per-OS app-data dir
    — Windows `%APPDATA%\BlockchainInvestigationHub`, macOS `~/Library/Application Support/BlockchainInvestigationHub`,
    Linux `$XDG_DATA_HOME` (or `~/.local/share`)`/BlockchainInvestigationHub`. **Portable:** drop a

@@ -131,12 +131,11 @@ def main() -> int:
         check("no writes under _MEIPASS (_internal unchanged)", not changed,
               ("changed/new: " + ", ".join(sorted(changed))[:600]) if changed else "")
 
-        # 7. keyring resolved (Windows: must be available; other OS: resolved-but-maybe-unavailable is ok)
+        # 7. keyring — SEC-08: the FROZEN app must have an AVAILABLE backend on ANY OS (run_check gates on
+        # it now). A shipped build whose keyring can't store a key is a build defect, not a per-OS excuse.
         kr = probes.get("keyring", {})
         check("keyring backend resolved", "backend" in kr and "error" not in kr, json.dumps(kr))
-        if sys.platform == "win32":
-            check("keyring available (Windows Credential Manager)", kr.get("available") is True,
-                  kr.get("backend", ""))
+        check("keyring available (frozen app, any OS)", kr.get("available") is True, kr.get("backend", ""))
 
         # 8. TLS / certifi
         tls = probes.get("tls", {})

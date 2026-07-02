@@ -17,8 +17,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 
 from ..models import Asset, Transaction
-from .canonical import canonical_address
-from .etherscan_adapter import NATIVE_SYMBOL, ParsedTransaction, ParsedTransfer
+from .canonical import canonical_address, to_canonical_ts
+from .etherscan_adapter import NATIVE_SYMBOL, ParsedTransaction, ParsedTransfer, _display_or_none
 
 # Canonical chain -> Bitquery V2 EVM `network` slug. TODO: confirm the exact slugs (40+ supported).
 CHAIN_TO_NETWORK: dict[str, str] = {
@@ -114,14 +114,16 @@ def adapt_transfers(payload: dict, *, chain: str) -> tuple[list[ParsedTransactio
         if tx_hash not in by_tx:
             by_tx[tx_hash] = ParsedTransaction(transaction=Transaction(
                 chain=chain, tx_hash=tx_hash, block_height=_int(blk.get("Number")),
-                block_ts=(blk.get("Time") or None), fee=None, status=None,
+                block_ts=to_canonical_ts(blk.get("Time")), fee=None, status=None,  # LOG-05: canonical ts
                 confirmations=None, finality_status="provisional"))  # no confirmations from Bitquery
         key = (tx_hash, transfer_type)
         position = pos.get(key, 0)
         pos[key] = position + 1
         by_tx[tx_hash].transfers.append(ParsedTransfer(
             chain=chain, from_address=from_addr, to_address=to_addr, asset=asset,
-            amount=amount, transfer_type=transfer_type, position=position))
+            amount=amount, transfer_type=transfer_type, position=position,
+            from_address_display=_display_or_none(tr.get("Sender")),        # COR-02: keep EIP-55 checksum
+            to_address_display=_display_or_none(tr.get("Receiver"))))
         notes["transfers"] += 1
 
     return list(by_tx.values()), notes

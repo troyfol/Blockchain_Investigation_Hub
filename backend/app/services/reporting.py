@@ -153,6 +153,20 @@ def _esc(v) -> str:
     return html.escape("" if v is None else str(v))
 
 
+def _script_safe(json_text: str) -> str:
+    """Escape a JSON string for safe embedding inside an inline ``<script>`` element (SEC-01/SEC-11).
+
+    ``json.dumps`` does NOT escape ``<`` / ``>`` / ``&``, so an attacker-controlled token symbol /
+    attribution name / label containing ``</script>`` (or ``<!--``) closes the element per the HTML
+    script-data-end rule and its trailing markup is parsed as HTML — stored code-execution into the
+    court-facing report. Escaping these to ``\\uXXXX`` (still-valid JSON string escapes the browser
+    decodes back to the same characters) keeps the payload as DATA, never markup. U+2028/U+2029 are
+    already escaped by the default ``ensure_ascii=True`` but are handled here too as defense-in-depth."""
+    return (json_text
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace(" ", "\\u2028").replace(" ", "\\u2029"))
+
+
 def _short(s, head: int = 10, tail: int = 8) -> str:
     s = "" if s is None else str(s)
     return s if len(s) <= head + tail + 1 else f"{s[:head]}…{s[-tail:]}"
@@ -382,8 +396,8 @@ def render_html(ctx: dict) -> str:
 
   <script>{cyjs}</script>
   <script>
-    var ELEMENTS = {json.dumps(elements)};
-    var STYLE = {cytoscape_style_json()};
+    var ELEMENTS = {_script_safe(json.dumps(elements))};
+    var STYLE = {_script_safe(cytoscape_style_json())};
     var cy = cytoscape({{ container: document.getElementById('cy'), elements: ELEMENTS, style: STYLE }});
     window.__cy = cy;
     function done() {{ if (window.__CY_READY__) return; try {{ cy.fit(undefined, 20); }} catch (e) {{}} window.__CY_READY__ = true; }}

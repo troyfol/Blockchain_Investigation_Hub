@@ -37,6 +37,12 @@ MIGRATIONS_DIR = resource_path("backend/app/migrations")
 CURRENT_SCHEMA_VERSION = 6
 
 
+class SchemaTooNewError(Exception):
+    """LOG-03: the case DB was created by a NEWER app version — its applied-migration set contains ids
+    this build does not ship. Opening it would operate on a schema the app only half-understands, so we
+    refuse with a clear message instead of silently proceeding."""
+
+
 def _sqlite_uri(db_path: Path) -> str:
     # yoyo wants a forward-slash absolute path; on Windows this yields e.g.
     # sqlite:///C:/python/.../case.db which the sqlite backend opens correctly.
@@ -73,7 +79,6 @@ def apply_migrations(db_path: str | Path) -> int:
             # Pass the MigrationList itself (NOT list(pending)) — apply_migrations needs its
             # .post_apply attribute, which a plain list lacks.
             backend.apply_migrations(pending)
-        return count
     finally:
         # Close yoyo's own connection so it doesn't linger as a leaked handle on the case DB. On
         # Windows an open handle locks the file (blocks a later move/delete) and pins the WAL — exactly
@@ -83,6 +88,53 @@ def apply_migrations(db_path: str | Path) -> int:
             backend.connection.close()
         except Exception:  # pragma: no cover - defensive across yoyo internals
             pass
+    _stamp_schema_version(path)  # LOG-02: keep case_meta.schema_version tracking the applied set
+    return count
+
+
+def _stamp_schema_version(db_path: str | Path) -> None:
+    """LOG-02: after a successful apply, stamp ``case_meta.schema_version = CURRENT_SCHEMA_VERSION`` so the
+    value tracks the applied migration set. It was previously stamped ONCE at ``init_case`` and never
+    updated, so three identically-migrated DBs reported 5/3/1. A fresh DB whose ``case_meta`` row is not
+    yet inserted (``init_case`` runs next) is a 0-row no-op; pre-Phase-1 (no ``case_meta`` table) is skipped."""
+    conn = get_connection(db_path)
+    try:
+        conn.execute("UPDATE case_meta SET schema_version = ?", (CURRENT_SCHEMA_VERSION,))
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+    finally:
+        conn.close()
+
+
+def known_migration_ids() -> set[str]:
+    """The migration ids this app build ships (the app's schema knowledge)."""
+    return {m.id for m in read_migrations(str(MIGRATIONS_DIR))}
+
+
+def applied_migration_ids(db_path: str | Path) -> set[str]:
+    """The migration ids recorded as applied in the DB's ``_yoyo_migration`` table (empty for a fresh DB)."""
+    conn = get_connection(db_path, create_parents=False)
+    try:
+        rows = conn.execute("SELECT migration_id FROM _yoyo_migration").fetchall()
+        return {r[0] for r in rows}
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return set()  # never migrated yet
+        raise
+    finally:
+        conn.close()
+
+
+def assert_supported_schema(db_path: str | Path) -> None:
+    """LOG-03: refuse to open a case DB created by a NEWER app version. Keys on the ``_yoyo_migration`` set
+    (the reliable signal — a pre-LOG-02-fix DB may carry a stale ``schema_version`` stamp), not the stamp.
+    If the DB has applied migrations this build doesn't know, raise :class:`SchemaTooNewError`."""
+    unknown = applied_migration_ids(db_path) - known_migration_ids()
+    if unknown:
+        raise SchemaTooNewError(
+            "this case was created by a newer version of the app and cannot be opened safely "
+            f"(unknown migrations: {', '.join(sorted(unknown))}). Update the app to open it.")
 
 
 def read_schema_version(db_path: str | Path) -> int:

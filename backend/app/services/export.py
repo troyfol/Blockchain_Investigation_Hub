@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -34,6 +36,60 @@ MANIFEST_NAME = "manifest.json"
 CASE_DB_NAME = "case.db"
 # Directories whose every file is hashed into the manifest and shipped in the bundle.
 HASHED_SUBDIRS = ("raw_responses", "exhibits", "reports", ".audit_baselines")
+
+# SEC-05/SEC-16: caps + per-member checks for extracting an UNTRUSTED `.casefile` (a bundle is
+# attacker-controlled). Generous for a real case (a large case.db + raw_responses) but far below a
+# decompression bomb. The size ceiling is enforced against ACTUAL bytes during inflation (a lying header
+# can't get past it), and each member's path/symlink is validated before any write.
+MAX_CASEFILE_MEMBERS = 100_000
+MAX_CASEFILE_BYTES = 2 * 1024 ** 3      # 2 GiB total uncompressed ceiling
+MAX_MEMBER_RATIO = 5000                 # per-member compression ratio cap (bomb guard)
+
+
+def _reject_unsafe_member(zi: "zipfile.ZipInfo", dest: Path) -> None:
+    """SEC-16: reject a zip member that is a symlink, or whose name is absolute / drive-qualified /
+    escapes ``dest`` via ``..`` — before it is written. Defense-in-depth over the stdlib's own
+    sanitization (which a future extractor/Python change could weaken)."""
+    name = zi.filename
+    if (zi.external_attr >> 16) & 0o170000 == 0o120000:  # S_IFLNK
+        raise ValueError(f"casefile contains a symlink member ({name!r}) — refusing to extract")
+    if name.startswith(("/", "\\")) or (len(name) >= 2 and name[1] == ":"):
+        raise ValueError(f"casefile member has an absolute/drive-qualified path ({name!r})")
+    resolved = (dest / name).resolve()
+    if resolved != dest.resolve() and dest.resolve() not in resolved.parents:
+        raise ValueError(f"casefile member escapes the extraction dir ({name!r})")
+
+
+def _safe_extract(z: zipfile.ZipFile, dest: Path) -> None:
+    """SEC-05/SEC-16: validate members (count / declared-size / ratio / path-safety) then extract
+    member-by-member with a running byte budget so a decompression bomb or a lying header can't inflate
+    past the ceiling. Raises ``ValueError`` on any breach (the caller cleans up + rejects the bundle)."""
+    infos = z.infolist()
+    if len(infos) > MAX_CASEFILE_MEMBERS:
+        raise ValueError(f"casefile has too many members ({len(infos)} > {MAX_CASEFILE_MEMBERS})")
+    if sum(i.file_size for i in infos) > MAX_CASEFILE_BYTES:
+        raise ValueError("casefile declares more than the extraction size ceiling")
+    for zi in infos:
+        _reject_unsafe_member(zi, dest)
+        if zi.compress_size > 0 and zi.file_size / zi.compress_size > MAX_MEMBER_RATIO:
+            raise ValueError(f"casefile member {zi.filename!r} has a suspicious compression ratio")
+    dest.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for zi in infos:
+        target = dest / zi.filename
+        if zi.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with z.open(zi) as src, open(target, "wb") as out:
+            while True:
+                chunk = src.read(1 << 16)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_CASEFILE_BYTES:
+                    raise ValueError("casefile exceeds the extraction size ceiling during inflation")
+                out.write(chunk)
 
 
 def _sha256(path: Path) -> str:
@@ -89,7 +145,10 @@ def write_manifest(case_dir) -> Path:
     case_dir = Path(case_dir)
     manifest = build_manifest(case_dir)
     path = case_dir / MANIFEST_NAME
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    # RES-04: temp-then-rename so a crash mid-write never leaves a truncated/desynced manifest.json.
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
@@ -143,10 +202,23 @@ def export_case(case_dir, *, out_path=None) -> Path:
     _checkpoint_wal(case_dir)  # make case.db self-complete before hashing/zipping (export robustness)
     write_manifest(case_dir)
     out_path = Path(out_path) if out_path else case_dir.parent / f"{case_dir.name}.casefile"
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(case_dir / MANIFEST_NAME, MANIFEST_NAME)
-        for f in _iter_case_files(case_dir):
-            z.write(f, f.relative_to(case_dir).as_posix())
+    # RES-04: build the bundle at a temp path and atomically rename it into place only after a clean
+    # close, so a crash mid-zip never leaves a TRUNCATED `.casefile` at the expected name (which a
+    # colleague could copy before re-verifying). On failure, clean up the partial temp.
+    tmp_out = out_path.with_name(out_path.name + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp_out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(case_dir / MANIFEST_NAME, MANIFEST_NAME)
+            for f in _iter_case_files(case_dir):
+                z.write(f, f.relative_to(case_dir).as_posix())
+        os.replace(tmp_out, out_path)
+    except BaseException:
+        try:
+            if tmp_out.exists():
+                tmp_out.unlink()
+        except OSError:
+            pass
+        raise
     return out_path
 
 
@@ -222,8 +294,14 @@ def verify_casefile(casefile_path, *, extract_to=None) -> dict:
         import tempfile
         extract_to = Path(tempfile.mkdtemp(prefix="casefile_"))
     extract_to = Path(extract_to)
-    with zipfile.ZipFile(casefile_path, "r") as z:
-        z.extractall(extract_to)
+    # SEC-05/SEC-16: bounded, path-safe extraction BEFORE any hash/manifest check runs. On breach, clean
+    # up the partial extraction and reject the bundle (a ValueError the import routes surface as a 400).
+    try:
+        with zipfile.ZipFile(casefile_path, "r") as z:
+            _safe_extract(z, extract_to)
+    except (ValueError, zipfile.BadZipFile) as exc:
+        shutil.rmtree(extract_to, ignore_errors=True)
+        raise ValueError(f"refusing to import this .casefile: {exc}") from exc
 
     manifest_check = verify_manifest(extract_to)
     db_check = _verify_db_self_contained(extract_to / CASE_DB_NAME)

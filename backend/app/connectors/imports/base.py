@@ -13,11 +13,17 @@ import csv
 import io
 from pathlib import Path
 
+from ..base import ConnectorError
 from ...db import repository as repo
 from ...db.repository import utc_now_iso
 from ...models import Address, SourceQuery
 from ...normalization.canonical import canonical_address
 from ...provenance.atomic import write_with_provenance
+
+# SEC-15: cap an imported CSV so a hostile/huge file can't exhaust memory if the import is ever exposed
+# via a route. Generous for a real Arkham/GraphSense export.
+MAX_CSV_BYTES = 64 * 1024 * 1024   # 64 MiB
+MAX_CSV_ROWS = 1_000_000
 
 
 def parse_float(v):
@@ -44,7 +50,25 @@ class ImportConnector:
 
     @staticmethod
     def read_csv(raw_bytes: bytes) -> list[dict]:
-        return list(csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig"))))
+        """Decode + materialize a CSV import. SEC-09/SEC-15: a hostile CSV (null byte / oversized field /
+        wrong encoding / over-cap size) raises a clean ``ConnectorError`` with a hint — never a raw
+        ``csv.Error``/``UnicodeDecodeError`` traceback."""
+        if len(raw_bytes) > MAX_CSV_BYTES:
+            raise ConnectorError(
+                f"CSV import is {len(raw_bytes)} bytes, over the {MAX_CSV_BYTES} cap — refusing to import.")
+        try:
+            text = raw_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ConnectorError(f"CSV import is not valid UTF-8 (offset {exc.start}): {exc.reason}.") from exc
+        try:
+            rows = []
+            for i, row in enumerate(csv.DictReader(io.StringIO(text))):
+                if i >= MAX_CSV_ROWS:
+                    raise ConnectorError(f"CSV import exceeds the {MAX_CSV_ROWS}-row cap — refusing to import.")
+                rows.append(row)
+            return rows
+        except csv.Error as exc:
+            raise ConnectorError(f"malformed CSV import: {exc}.") from exc
 
     @staticmethod
     def _resolve_address(c, sqid, chain: str, display: str, known: dict | None):

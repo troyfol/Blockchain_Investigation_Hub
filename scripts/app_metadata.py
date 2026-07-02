@@ -27,10 +27,11 @@ APP_ID = "BlockchainInvestigationHub"
 # The frozen launcher exe basename (dist/BIH/BIH.exe), set by bih.spec's EXE(name=...).
 EXE_NAME = "BIH"
 
-# Version. v1.0.0 is the first public release (P10). Bump here only — bih.spec + installer read this.
-VERSION = "1.0.0"
+# Version. v1.0.0 was the first public release (P10); v1.2.0 ships the R6 remediation + R6.1 upgrades.
+# Bump here only — bih.spec + installer read this.
+VERSION = "1.2.0"
 # 4-part numeric tuple for the Win32 FIXEDFILEINFO (filevers/prodvers). Keep in lockstep with VERSION.
-VERSION_TUPLE = (1, 0, 0, 0)
+VERSION_TUPLE = (1, 2, 0, 0)
 
 # Publisher / legal strings embedded in the exe AND shown by the installer + Programs-and-Features.
 COMPANY_NAME = "Blockchain Investigation Hub Project"

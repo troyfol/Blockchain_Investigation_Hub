@@ -11,9 +11,36 @@ One canonical string per real address so ``(chain, address)`` is a true unique k
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 # Accept either prefix case (0x / 0X); the canonical form always lowercases everything.
 EVM_ADDRESS_RE = re.compile(r"0[xX][0-9a-fA-F]{40}")
+
+_EPOCH_RE = re.compile(r"\d+(\.\d+)?")
+
+
+def to_canonical_ts(raw) -> str | None:
+    """Normalize a source timestamp to the canonical ``YYYY-MM-DDTHH:MM:SSZ`` (schema.md §2 — "one format
+    everywhere"). Accepts an ISO-8601 string (``Z`` or an explicit offset; naive is assumed UTC) or a unix
+    epoch (int / all-digit string). Returns ``None`` for empty/unparseable input — an honest gap the
+    valuation pass skips (LOG-05), never a raw non-canonical string leaking downstream to abort a pass."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if _EPOCH_RE.fullmatch(s):
+        try:
+            return datetime.fromtimestamp(float(s), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, OverflowError, OSError):
+            return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # v1 scope is EVM (account) + Bitcoin (UTXO). Treat bitcoin as UTXO; everything else as EVM.
 BTC_CHAINS = {"bitcoin", "btc"}

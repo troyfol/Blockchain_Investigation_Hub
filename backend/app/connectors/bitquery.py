@@ -100,12 +100,14 @@ class BitqueryConnector(BaseHttpConnector):
         assign_occurrences(parsed)  # content+occurrence dedup key (decision (c)) before the DB write
         n_tx = n_tr = 0
         for pt in parsed:
-            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid)
+            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid, authoritative=True)
             n_tx += 1
             for tr in pt.transfers:
-                from_id = (repo.upsert_address(conn, Address(chain=tr.chain, address_display=tr.from_address), sqid)
+                from_id = (repo.upsert_address(conn, Address(  # COR-02: keep the source checksum form
+                    chain=tr.chain, address_display=tr.from_address_display or tr.from_address), sqid)
                            if tr.from_address else None)
-                to_id = (repo.upsert_address(conn, Address(chain=tr.chain, address_display=tr.to_address), sqid)
+                to_id = (repo.upsert_address(conn, Address(
+                    chain=tr.chain, address_display=tr.to_address_display or tr.to_address), sqid)
                          if tr.to_address else None)
                 asset_id = repo.upsert_asset(conn, tr.asset, sqid)
                 repo.upsert_transfer(conn, Transfer(

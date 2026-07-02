@@ -94,22 +94,24 @@ def test_annotation_endpoints(client):
 
 def test_relabel_transaction_and_flow(client):
     c, ids = client
+    # EFF-01: the label endpoints no longer return a discarded full graph; the label effect is verified by
+    # refetching /api/graph (what the UI's loadView() does).
     # rename a TRANSACTION node -> the custom label wins the tx node's display name
     r = c.post(f"/api/target/transaction/{ids['tx']}/label", json={"label": "Peel hop #1"})
-    assert r.status_code == 200
-    tnode = next(n for n in r.json()["graph"]["nodes"] if n["id"] == f"tx:{ids['tx']}")
+    assert r.status_code == 200 and "graph" not in r.json()
+    tnode = next(n for n in c.get("/api/graph").json()["nodes"] if n["id"] == f"tx:{ids['tx']}")
     assert tnode["label"] == "Peel hop #1" and tnode.get("custom_label") is True
 
     # rename an EVM TRANSFER flow -> the edge carries the custom label + its durable target (ann_*)
     r2 = c.post(f"/api/target/transfer/{ids['transfer']}/label", json={"label": "stolen ETH"})
     assert r2.status_code == 200
-    e = next(x for x in r2.json()["graph"]["edges"] if x.get("ann_id") == ids["transfer"])
+    e = next(x for x in c.get("/api/graph").json()["edges"] if x.get("ann_id") == ids["transfer"])
     assert e["custom_label"] == "stolen ETH" and e["ann_type"] == "transfer"
 
     # rename a BTC OUTPUT flow
     r3 = c.post(f"/api/target/tx_output/{ids['txout']}/label", json={"label": "change output"})
     assert r3.status_code == 200
-    eo = next(x for x in r3.json()["graph"]["edges"] if x.get("ann_id") == ids["txout"])
+    eo = next(x for x in c.get("/api/graph").json()["edges"] if x.get("ann_id") == ids["txout"])
     assert eo["custom_label"] == "change output" and eo["ann_type"] == "tx_output"
 
     # guardrails: a non-relabelable type / an empty label / an unknown id

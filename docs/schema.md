@@ -25,8 +25,9 @@ copied verbatim into migration files in Phase 1. Forward-only; never edit an app
 ## 2. Finality model (decision #1)
 
 Finality lives on `transaction`; child facts inherit it (no own finality column). On each fetch the
-normalization layer sets `confirmations` (tip height − block_height) and `finality_status`:
-`provisional` until `confirmations ≥ threshold(chain)`, then `final`.
+normalization layer sets `confirmations` (`max(0, tip_height − block_height + 1)` — a tx in the tip block
+has **1** confirmation, not 0; LOG-09 corrected R6-2026-07-02, matching `finality.py` + `algorithms.md`)
+and `finality_status`: `provisional` until `confirmations ≥ threshold(chain)`, then `final`.
 
 - **`provisional`** transactions and their children MAY be updated/deleted on re-fetch (reorg /
   replacement). Upsert handles this.
@@ -42,6 +43,13 @@ normalization layer sets `confirmations` (tip height − block_height) and `fina
 | L2s (Arbitrum/Optimism/Base/Polygon/…) | conservative per-chain count | L2 finality depends on L1 settlement; set per chain in config. Confirm current guidance per chain. |
 
 ## 3. Migrations & DDL
+
+> **Coverage note (LOG-09, R6-2026-07-02):** this section details `0001–0005`. Migrations `0006–0010` are
+> summarized here and canonical in `backend/app/migrations/`: **0006** `entity.external_id` (GraphSense
+> ActorPack); **0007** `transfer.occurrence` + the content-based `ux_transfer` re-key (see §4); **0008**
+> `investigator_label` (display-label overrides); **0009** widens `investigator_label.target_type` to
+> transaction/transfer/tx_output; **0010** widens `entity.origin` with `'heuristic-cluster'` + adds the
+> data-gated `erc20_approval` table. `CURRENT_SCHEMA_VERSION = 6`.
 
 ### `0001_provenance_and_container.sql`
 
@@ -223,7 +231,7 @@ CREATE TABLE entity (
   id                      TEXT PRIMARY KEY,
   name                    TEXT,          -- NULL for auto co-spend clusters
   entity_type             TEXT,
-  origin                  TEXT NOT NULL CHECK (origin IN ('cospend-cluster','source','investigator')),
+  origin                  TEXT NOT NULL CHECK (origin IN ('cospend-cluster','source','investigator','heuristic-cluster')),  -- 'heuristic-cluster' added by 0010 (LOG-09)
   merged_into             TEXT REFERENCES entity(id),   -- tombstone; resolution chases this (decision #3)
   canonical_membership_id TEXT,          -- APP-ENFORCED ref to entity_membership(id) (decision #10)
   created_at              TEXT NOT NULL
@@ -394,11 +402,26 @@ CREATE VIEW v_address_flow AS
 | asset | `(chain, COALESCE(contract_address,''))` | symbol/decimals refresh |
 | address | `(chain, address)` | display/first_seen refresh |
 | transaction_ | `(chain, tx_hash)` | confirmations/finality/status refresh |
-| transfer | `(transaction_id, transfer_type, position)` | — (insert-once when final) |
+| transfer | `(transaction_id, transfer_type, COALESCE(from_address_id,''), COALESCE(to_address_id,''), asset_id, amount, occurrence)` | — (content+`occurrence` dedup, migration `0007`; `position` is a source-reported display ordinal only) |
 | tx_output | `(transaction_id, output_index)` | spent/spending_tx refresh |
 | tx_input | `(transaction_id, input_index)` | prev_output linkage refresh |
 
 Claims (Family B) are **append-only** — no upsert; each fetch is a new row (preserve disagreement).
+
+**Cross-source transfer-reconciliation limit (LOG-14).** The `transfer` dedup key is **content + `occurrence`**
+(migration `0007`), so it collapses the same on-chain movement to one row **only when two sources encode it
+byte-identically**. It does **not** catch the same movement encoded *differently* by two sources — e.g. an
+Arkham display-unit amount that rounds differently from Etherscan's exact wei, a movement Etherscan types as
+`internal` that Arkham/Bitquery can only express as `native`/`erc20`, or one aggregated Arkham row vs N
+itemized Etherscan rows. In those cases the movement lands as **two distinct `transfer` facts**, and the
+`v_value_movement` / `v_address_flow` read models **sum both**, so native/USD totals can be inflated when a
+high-fidelity source (Etherscan/Esplora) is mixed with a lower-fidelity one (Arkham CSV / Bitquery) for the
+**same** transactions. Both rows retain full provenance (no fact is lost). BIH intentionally does **not**
+run a fuzzy read-time reconciliation engine here — a reliable "same movement, different encoding" matcher
+would false-positive on legitimately-distinct same-pair transfers within one tx. **Mitigation:** use one
+primary source per chain for a given scope (the common case); treat mixed-source native/USD totals over the
+same txs as an upper bound. (R6 assessed a `value_contested`-style flag and downgraded to this documentation
+per the size-guard: a dependable flag is itself the reconciliation engine the plan scoped out.)
 
 ## 5. Application-enforced references (no DB FK)
 
@@ -408,8 +431,13 @@ SQLite can't express variable-target FKs; the application enforces these and `ma
 
 ## 6. Shared library cache (separate DB — NOT in any case folder)
 
-A separate SQLite DB caching cross-case claims/assets/prices keyed by natural keys, plus
-`cached_at`/`ttl`. On use, the relevant claim rows **and their originating `source_query` rows (with
-`raw_response_hash`)** are copied into the active `case.db` so the case is self-contained and provenance
-FKs resolve. The cache is a performance optimization only — never a runtime dependency of an opened case,
-and copying from cache is itself **not** a `source_query`. (No parquet — decision #7.)
+A separate SQLite DB caching cross-case claims/assets/prices keyed by natural keys. On use, the relevant
+claim rows **and their originating `source_query` rows (with `raw_response_hash`)** are copied into the
+active `case.db` so the case is self-contained and provenance FKs resolve. The cache is a performance
+optimization only — never a runtime dependency of an opened case, and copying from cache is itself **not**
+a `source_query`. (No parquet — decision #7.)
+
+> **No TTL/expiry (LOG-08, corrected R6-2026-07-02).** Earlier drafts described a `cached_at`/`ttl` expiry
+> policy and a `cache_ttl_days` knob; neither was ever implemented (the cache has no `cached_at`/`ttl`
+> columns and the config keys had zero readers). The dead `cache_ttl_days` / `etherscan_paid_tier` config
+> keys were removed. The cache simply never expires; re-fetching upserts on natural keys (Invariant #7).

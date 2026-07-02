@@ -59,6 +59,24 @@ class UpstreamError(ConnectorError):
     """Upstream returned a persistent error / bad status."""
 
 
+def _redact_url(url: str) -> str:
+    """The base+path only — drop any query string so a key-bearing param (``apikey``/``api_key``) can never
+    reach an error message or log (SEC-03). Query params are passed to httpx separately, so ``url`` is
+    normally already query-free; this is a defense-in-depth strip."""
+    return url.split("?", 1)[0]
+
+
+def fetch_bytes(url: str, *, timeout: float = 60.0, follow_redirects: bool = True) -> bytes:
+    """A plain one-shot HTTPS GET behind the same bundled-certifi TLS the connectors use (SEC-13: keep
+    ``httpx`` isolated to this module for non-connector downloads too, e.g. the OFAC intel refresh). Raises
+    a sanitized :class:`UpstreamError` on a bad status (redacted URL) — never a key-bearing traceback."""
+    with httpx.Client(timeout=timeout, verify=ca_bundle(), follow_redirects=follow_redirects) as c:
+        resp = c.get(url)
+        if resp.status_code >= 400:
+            raise UpstreamError(f"HTTP {resp.status_code} from {_redact_url(url)}")
+        return resp.content
+
+
 @runtime_checkable
 class Connector(Protocol):
     name: str
@@ -159,7 +177,12 @@ class BaseHttpConnector:
                 self._sleep(self._backoff_delay(attempt))
                 attempt += 1
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # SEC-03: a persistent 4xx must surface as a SANITIZED UpstreamError, never as
+                # httpx.HTTPStatusError (whose message embeds the request URL — Etherscan/MisTrack put
+                # `apikey` in the query string, so an uncaught HTTPStatusError would leak the key into the
+                # 500 logger). Build the message from the redacted base+path only (no query, no key).
+                raise UpstreamError(f"HTTP {resp.status_code} from {_redact_url(url)}")
             jobs.note_request()  # a successful page/price call -> progress + clear backoff + honor cancel
             return resp
 

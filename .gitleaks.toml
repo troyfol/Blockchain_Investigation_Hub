@@ -20,4 +20,7 @@ regexes = [
   '''0x[a-fA-F0-9]{40}''',            # EVM address (20 bytes)
   '''0x[a-fA-F0-9]{64}''',            # EVM / 32-byte tx hash
   '''T[1-9A-HJ-NP-Za-km-z]{33}''',    # Tron base58 address
+  # Deliberately-fake API key fixture used by the SEC-03 key-redaction test (its whole point is to assert
+  # this value is NEVER emitted in an error message). Not a real credential.
+  '''SECRETKEY123abcXYZ''',
 ]

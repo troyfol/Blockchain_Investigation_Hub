@@ -7,6 +7,7 @@ import CasePicker from "./CasePicker";
 import DenomPanel from "./DenomPanel";
 import ClusteringPanel from "./ClusteringPanel";
 import { checkIntel, intelSummary } from "./intel";
+import { addTraceTransfer, createTrace, fifoTrace } from "./traces";
 import { getActiveJob, jobProgressLine } from "./jobs";
 import { caseLabel, getActiveCase, type CaseMeta } from "./cases";
 import FindingsPanel from "./FindingsPanel";
@@ -382,6 +383,18 @@ export default function App() {
       .catch((e) => setError(String(e)));
   }, [loadView, loadTraces]);
 
+  // Trace CONSTRUCTION (LOG-04): create a trace, add the selected EVM transfer, or FIFO-apportion the
+  // selected Bitcoin tx. Each refreshes the trace list + the view (a new trace edge may appear).
+  const handleCreateTrace = useCallback((name: string) => {
+    createTrace(name).then(() => loadTraces()).catch((e) => setError(String(e)));
+  }, [loadTraces]);
+  const handleAddTransferToTrace = useCallback((traceId: string, transferId: string) => {
+    addTraceTransfer(traceId, transferId).then(() => { loadTraces(); loadView(); }).catch((e) => setError(String(e)));
+  }, [loadTraces, loadView]);
+  const handleFifoTx = useCallback((traceId: string, txId: string) => {
+    fifoTrace(traceId, txId).then(() => { loadTraces(); loadView(); }).catch((e) => setError(String(e)));
+  }, [loadTraces, loadView]);
+
   // Ordered layout (P3.5 feature 1): right-click a node -> a context menu to order THAT node's neighbors
   // by value / sequence. The menu position is the page coords from the DOM event. Ordering lives in the
   // view-state (so it's in the view-history + reset by Home) but is a pure frontend layout (no refetch).
@@ -648,7 +661,8 @@ export default function App() {
                    annotations={annotations} nodesById={nodesById} onAddAnnotation={handleAddAnnotation}
                    onEditAnnotation={handleEditAnnotation} onDeleteAnnotation={handleDeleteAnnotation}
                    onSaveLabel={handleSaveLabel} onSaveTraceLabel={handleSaveTraceLabel}
-                   onFocus={focusOn} fontScale={panelFont} />
+                   onCreateTrace={handleCreateTrace} onAddTransferToTrace={handleAddTransferToTrace}
+                   onFifoTx={handleFifoTx} onFocus={focusOn} fontScale={panelFont} />
       </div>
 
       {showFindings && (

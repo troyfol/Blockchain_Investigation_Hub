@@ -284,6 +284,69 @@ function RenameAndNotes({ target, currentLabel, isCustom, annotations, onSaveLab
   );
 }
 
+// The contextual action the current selection offers a trace: add an EVM transfer FACT, or FIFO-apportion
+// a Bitcoin transaction into `basis='fifo'` links (a labeled convention, never ground-truth flow).
+type TraceAction = { type: "transfer" | "fifo"; id: string; label: string };
+
+// Build + populate traces (LOG-04). Create a named trace, then add the selected EVM transfer, or
+// FIFO-apportion the selected Bitcoin transaction. The writers are insert-once (re-running is safe).
+function TraceBuilder({ traces, action, onCreateTrace, onAddTransferToTrace, onFifoTx }: {
+  traces: TraceInfo[]; action: TraceAction | null;
+  onCreateTrace: (name: string) => void;
+  onAddTransferToTrace: (traceId: string, transferId: string) => void;
+  onFifoTx: (traceId: string, txId: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [traceId, setTraceId] = useState(traces[0]?.id ?? "");
+  useEffect(() => {  // keep the picked trace valid as the list changes
+    if (!traces.some((tr) => tr.id === traceId)) setTraceId(traces[0]?.id ?? "");
+  }, [traces, traceId]);
+  const field: React.CSSProperties = { background: t("ui.panel.elevated"), color: t("ui.text"),
+    border: `1px solid ${t("ui.border")}`, borderRadius: 3, padding: "3px 6px", fontSize: em(12) };
+  const create = () => { const v = name.trim(); if (v) { onCreateTrace(v); setName(""); } };
+  const apply = () => {
+    if (!traceId || !action) return;
+    if (action.type === "transfer") onAddTransferToTrace(traceId, action.id);
+    else onFifoTx(traceId, action.id);
+  };
+  return (
+    <>
+      <SectionHeader title="Build a trace" />
+      <div style={{ display: "flex", gap: 4 }}>
+        <input value={name} placeholder="new trace name…" onChange={(e) => setName(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter") create(); }} style={{ ...field, flex: 1, minWidth: 0 }} />
+        <button onClick={create} style={{ ...field, cursor: "pointer" }}>+ New</button>
+      </div>
+      {action ? (
+        traces.length === 0 ? (
+          <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
+            Create a trace above, then add the selected {action.type === "fifo" ? "transaction" : "transfer"} to it.
+          </p>
+        ) : (
+          <div style={{ marginTop: 6 }}>
+            <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
+              {action.type === "fifo" ? "FIFO-apportion " : "Add "}{action.label}
+            </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <select value={traceId} onChange={(e) => setTraceId(e.target.value)}
+                      style={{ ...field, flex: 1, minWidth: 0, cursor: "pointer" }}>
+                {traces.map((tr) => <option key={tr.id} value={tr.id}>{tr.name}</option>)}
+              </select>
+              <button onClick={apply} style={{ ...field, cursor: "pointer" }}>
+                {action.type === "fifo" ? "Apportion" : "Add"}
+              </button>
+            </div>
+          </div>
+        )
+      ) : (
+        <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
+          Select an EVM transfer flow, or a Bitcoin transaction node, to add it to a trace.
+        </p>
+      )}
+    </>
+  );
+}
+
 function TraceList({ traces, onSaveTraceLabel }: {
   traces: TraceInfo[]; onSaveTraceLabel: (traceId: string, label: string) => void;
 }) {
@@ -439,7 +502,8 @@ function EdgeView({ edge, nodesById, target, annotations, onSaveLabel, onAddAnno
 
 export default function SidePanel({ node, edge = null, claims, summary, traces = [], annotations = [],
                                     nodesById = {}, onAddAnnotation, onEditAnnotation, onDeleteAnnotation,
-                                    onSaveLabel, onSaveTraceLabel, onFocus, fontScale = 1 }: {
+                                    onSaveLabel, onSaveTraceLabel, onCreateTrace, onAddTransferToTrace,
+                                    onFifoTx, onFocus, fontScale = 1 }: {
   node: GraphNode | null;
   edge?: GraphEdge | null;
   claims: AddressClaims | null;
@@ -452,22 +516,40 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
   onDeleteAnnotation?: (id: string) => void;
   onSaveLabel?: (ttype: string, tid: string, label: string) => void;
   onSaveTraceLabel?: (traceId: string, label: string) => void;
+  onCreateTrace?: (name: string) => void;
+  onAddTransferToTrace?: (traceId: string, transferId: string) => void;
+  onFifoTx?: (traceId: string, txId: string) => void;
   onFocus?: (nodeId: string) => void;
   fontScale?: number;
 }) {
   // One root font-size drives the whole panel; the UI pref scales it (children use em — feature 6).
   const panelStyle: React.CSSProperties = { ...PANEL, fontSize: BASE_PX * fontScale };
 
-  // The Traces list (rename paths) is shown whether or not a node is selected.
-  const traceSection = traces.length > 0 && onSaveTraceLabel
-    ? <TraceList traces={traces} onSaveTraceLabel={onSaveTraceLabel} />
-    : null;
+  // What the current selection offers a trace: an EVM transfer FACT (a flow with a durable transfer
+  // target), or a Bitcoin transaction to FIFO-apportion. Nothing else is addable.
+  const traceAction: TraceAction | null =
+    edge && edge.ann_type === "transfer" && edge.ann_id
+      ? { type: "transfer", id: edge.ann_id, label: `this transfer${edge.value_label ? ` (${edge.value_label})` : ""}` }
+      : node && node.kind === "transaction" && node.chain === "bitcoin"
+        ? { type: "fifo", id: node.id.replace(/^tx:/, ""), label: `this BTC tx${node.label ? ` (${node.label})` : ""}` }
+        : null;
+
+  // The Traces area (rename existing paths + build/populate new ones), shown regardless of selection.
+  const traceArea = (
+    <>
+      {traces.length > 0 && onSaveTraceLabel && <TraceList traces={traces} onSaveTraceLabel={onSaveTraceLabel} />}
+      {onCreateTrace && onAddTransferToTrace && onFifoTx && (
+        <TraceBuilder traces={traces} action={traceAction} onCreateTrace={onCreateTrace}
+          onAddTransferToTrace={onAddTransferToTrace} onFifoTx={onFifoTx} />
+      )}
+    </>
+  );
 
   // A tapped FLOW (edge) takes over the panel: its facts + the universal rename / annotate controls.
   if (edge && !node) {
     return (
       <aside style={panelStyle}>
-        {traceSection}
+        {traceArea}
         <EdgeView edge={edge} nodesById={nodesById} target={targetOf(null, edge)}
           annotations={annotations} onSaveLabel={onSaveLabel} onAddAnnotation={onAddAnnotation}
           onEditAnnotation={onEditAnnotation} onDeleteAnnotation={onDeleteAnnotation}
@@ -479,7 +561,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
   if (!node) {
     return (
       <aside style={panelStyle}>
-        {traceSection}
+        {traceArea}
         <p style={{ color: t("ui.muted") }}>Select a node or flow to see its facts and sourced claims.</p>
       </aside>
     );
@@ -496,7 +578,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
 
   return (
     <aside style={panelStyle}>
-      {traceSection}
+      {traceArea}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ margin: 0, textTransform: "capitalize" }}>{node.kind}</h3>
         {canFocus && (

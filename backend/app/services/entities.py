@@ -71,6 +71,34 @@ def resolve(conn, entity_id: str) -> str:
         cur = row["merged_into"]
 
 
+def build_merge_resolver(conn):
+    """EFF-03: load the merge forest ONCE (``id -> merged_into``) and return an in-memory resolver
+    ``f(entity_id) -> terminal`` — so a hot-path aggregation over all memberships doesn't issue a
+    ``resolve()`` point-query per row (an N+1 in ``build_graph``). Carries the same cycle guard + a memo."""
+    parent = {r["id"]: r["merged_into"]
+              for r in conn.execute("SELECT id, merged_into FROM entity").fetchall()}
+    cache: dict[str, str] = {}
+
+    def _resolve(entity_id: str) -> str:
+        chain: list[str] = []
+        cur = entity_id
+        while cur not in cache:
+            nxt = parent.get(cur)
+            if nxt is None:
+                cache[cur] = cur  # terminal (no merged_into, or unknown id)
+                break
+            if cur in chain:
+                raise ValueError(f"merged_into cycle at {cur!r}")
+            chain.append(cur)
+            cur = nxt
+        terminal = cache[cur]
+        for e in chain:
+            cache[e] = terminal
+        return terminal
+
+    return _resolve
+
+
 # --- CoinJoin --------------------------------------------------------------------------------
 
 def is_probable_coinjoin(conn, tx_id: str) -> bool:
@@ -187,8 +215,11 @@ def link_same_address(conn, *, now: str | None = None) -> dict:
             existing = set()
             for aid in ids:
                 existing |= _same_address_entities(c, aid)
+            # COR-04: a machine-derived cluster carries the HONEST machine origin 'heuristic-cluster'
+            # (migration 0010's purpose), NOT 'investigator' — so `entity.origin` reliably separates
+            # human-authored groupings from heuristic ones (matches btc_change / Victor EVM heuristics).
             survivor = min(existing) if existing else repo.insert_entity(
-                c, Entity(origin="investigator", entity_type="same-address"), now=now)
+                c, Entity(origin="heuristic-cluster", entity_type="same-address"), now=now)
             for aid in ids:
                 if survivor in _same_address_entities(c, aid):
                     continue  # already linked (idempotent — insert once per address)

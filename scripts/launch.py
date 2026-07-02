@@ -576,6 +576,7 @@ class Launcher:
             self.serve()
             if self._cancel.is_set():
                 return
+            self._emit_keyring_warning()  # SEC-08: non-fatal keyring-unavailable notice
             self._set_status("Ready.")
             self.window.load_url(self.url)
         except _Cancelled:
@@ -646,12 +647,34 @@ class Launcher:
             return 2
         print(f">> serving {WINDOW_TITLE} at {self.url}  (case: {self.case})")
         print(f">> health: {health}")
+        self._emit_keyring_warning()  # SEC-08: non-fatal keyring-unavailable notice
         print(">> press Ctrl-C to stop.")
         try:
             self._stop_block.wait()
         finally:
             self.teardown()
         return 0
+
+    def _keyring_warning(self) -> str | None:
+        """SEC-08: a NON-FATAL warning when the OS keyring backend is unavailable — API keys can't be saved
+        (a clean 503 at key-write) until a backend is present. Returned (for tests) + printed at startup so a
+        keyring-less host is told up front instead of only discovering it at key-write time."""
+        try:
+            from backend.app.secrets import keyring_status
+            st = keyring_status()
+        except Exception:
+            return None
+        if st.get("available"):
+            return None
+        return (">> WARNING: no usable OS keyring backend "
+                f"(backend={st.get('backend')!r}); API keys cannot be saved until one is available "
+                "(Settings → Connectors will report this). The app runs; ingest that needs a key will fail "
+                "with a clear message.")
+
+    def _emit_keyring_warning(self) -> None:
+        msg = self._keyring_warning()
+        if msg:
+            print(msg, file=sys.stderr)
 
     def _self_check_probes(self, health: dict) -> dict:
         """The frozen DoD battery (P8): beyond /health, exercise the graph API, the keyring backend, the
@@ -679,9 +702,13 @@ class Launcher:
             result["graph"] = {"error": f"{type(exc).__name__}: {exc}"}
             result["ok"] = False
 
-        # keyring — must RESOLVE (not crash) and report a backend; availability is per-OS (smoke asserts).
+        # keyring — must RESOLVE (not crash) and report a backend. SEC-08: in the FROZEN app the backend
+        # must also be AVAILABLE on ANY OS (a broken keyring means key-write 503s later) — that is a hard
+        # gate. Source-mode --check reports it but does not gate (a keyring-less CI host is legitimate).
         try:
             result["keyring"] = keyring_status()
+            if is_frozen() and not result["keyring"].get("available"):
+                result["ok"] = False
         except Exception as exc:
             result["keyring"] = {"error": f"{type(exc).__name__}: {exc}"}
             result["ok"] = False

@@ -153,17 +153,12 @@ def refresh_ofac(*, dest_dir: Path | None = None) -> dict:
 
     if is_offline():
         raise RuntimeError("offline mode is on — turn it off to refresh intel from source")
-    import httpx
-
     from ..app_paths import user_data_dir
-    from ..runtime import ca_bundle
+    from ..connectors.base import fetch_bytes  # SEC-13: httpx stays isolated to the connectors module
 
     dest_dir = dest_dir or (user_data_dir() / "intel")
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "sdn.xml"
-    with httpx.Client(timeout=60.0, verify=ca_bundle(), follow_redirects=True) as c:
-        resp = c.get(OFAC_SDN_URL)
-        resp.raise_for_status()
-        dest.write_bytes(resp.content)
+    dest.write_bytes(fetch_bytes(OFAC_SDN_URL, timeout=60.0))
     settings_store.set_intel_source("ofac", dest)
     return {"ok": True, "path": str(dest), "date": _ofac_date(dest), "bytes": dest.stat().st_size}

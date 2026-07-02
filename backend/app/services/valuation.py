@@ -27,28 +27,29 @@ def _unix_to_iso(ts: int) -> str:
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _load_asset(conn, asset_id: str) -> Asset | None:
-    r = conn.execute(
-        "SELECT chain, contract_address, symbol, decimals FROM asset WHERE id=?", (asset_id,)).fetchone()
-    if r is None:
-        return None
-    return Asset(chain=r["chain"], contract_address=r["contract_address"], symbol=r["symbol"],
-                 decimals=r["decimals"])
-
-
-def _unvalued_movements(conn):
-    """Value movements (from the view) that have no valuation yet and can be valued."""
-    return conn.execute(
-        """
-        SELECT m.paradigm, m.movement_id, m.amount, m.chain, m.asset_id, m.transaction_id
+def _unvalued_movements(conn, limit: int | None = None):
+    """Value movements (from the view) that have no valuation yet and can be valued. EFF-04: the asset
+    fields + block_ts are JOINed in (no per-movement point queries) and the pass cap is applied as a SQL
+    ``LIMIT`` (no materialize-all-then-slice)."""
+    sql = """
+        SELECT m.paradigm, m.movement_id, m.amount, m.chain, m.transaction_id,
+               a.chain AS asset_chain, a.contract_address AS asset_contract,
+               a.symbol AS asset_symbol, a.decimals AS asset_decimals,
+               t.block_ts AS block_ts
         FROM v_value_movement m
-        WHERE m.asset_id IS NOT NULL
-          AND NOT EXISTS (
+        JOIN asset a ON a.id = m.asset_id
+        JOIN transaction_ t ON t.id = m.transaction_id
+        WHERE NOT EXISTS (
             SELECT 1 FROM valuation v
             WHERE v.subject_type = (CASE m.paradigm WHEN 'evm' THEN 'transfer' ELSE 'tx_output' END)
               AND v.subject_id = m.movement_id)
-        """
-    ).fetchall()
+        ORDER BY m.movement_id
+    """
+    params: tuple = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (limit,)
+    return conn.execute(sql, params).fetchall()
 
 
 def value_movements(conn, connector, *, now: str | None = None, limit: int | None = None,
@@ -71,25 +72,28 @@ def value_movements(conn, connector, *, now: str | None = None, limit: int | Non
     consecutive_errors = 0
     source_unavailable = False
 
-    rows = _unvalued_movements(conn)
-    if limit is not None:
-        rows = rows[:limit]
+    rows = _unvalued_movements(conn, limit=limit)  # EFF-04: cap + asset/block_ts JOIN pushed into SQL
     if job is not None:  # P8.7.2 — report progress ("valued M of N") via the active job
         job.phase = "valuing"
         job.total = len(rows)
         job.valued = 0
 
-    # Resolve each movement's asset + block timestamp; group by timestamp for batching.
+    # Group by timestamp for batching. Asset + block_ts come back on the row (no per-movement queries).
     by_ts: dict[int, list] = defaultdict(list)
     for m in rows:
         subject_type = "transfer" if m["paradigm"] == "evm" else "tx_output"
-        asset = _load_asset(conn, m["asset_id"])
-        block_ts = conn.execute(
-            "SELECT block_ts FROM transaction_ WHERE id=?", (m["transaction_id"],)).fetchone()["block_ts"]
-        if asset is None or not block_ts:
-            skipped += 1  # no asset/decimals or no block timestamp (mempool) → can't value at time
+        asset = Asset(chain=m["asset_chain"], contract_address=m["asset_contract"],
+                      symbol=m["asset_symbol"], decimals=m["asset_decimals"])
+        block_ts = m["block_ts"]
+        if not block_ts:
+            skipped += 1  # no block timestamp (mempool) → can't value at time
             continue
-        by_ts[_iso_to_unix(block_ts)].append((m, subject_type, asset))
+        try:
+            unix_ts = _iso_to_unix(block_ts)  # LOG-05: a non-ISO block_ts is an honest skip, not a crash
+        except ValueError:
+            skipped += 1
+            continue
+        by_ts[unix_ts].append((m, subject_type, asset))
 
     for ts in sorted(by_ts):
         if job is not None:
@@ -110,8 +114,11 @@ def value_movements(conn, connector, *, now: str | None = None, limit: int | Non
         try:
             prices, payload = connector.get_prices(list(distinct.values()), ts)
             consecutive_errors = 0
-        except ConnectorError:
-            errors += 1  # rate limit / upstream → honest gap (NO rows) for the whole group
+        except (ConnectorError, ValueError):
+            # RES-01: a rate-limit/upstream ConnectorError OR a decode failure (a non-JSON 200 makes
+            # `.json()` raise ValueError/JSONDecodeError) is an honest gap (NO rows) for the whole group,
+            # feeding the circuit-breaker — never an abort of the entire pass.
+            errors += 1
             consecutive_errors += 1
             skipped += len(group)
             if consecutive_errors >= max_consecutive_errors:

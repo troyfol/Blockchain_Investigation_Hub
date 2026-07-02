@@ -78,8 +78,15 @@ def upsert_asset(conn, asset: Asset, source_query_id: str | None) -> str:
         """INSERT INTO asset (id, chain, contract_address, symbol, decimals, source_query_id)
            VALUES (?,?,?,?,?,?)
            ON CONFLICT(chain, COALESCE(contract_address,'')) DO UPDATE SET
-             symbol   = excluded.symbol,
-             decimals = excluded.decimals""",
+             symbol   = COALESCE(excluded.symbol, asset.symbol),
+             -- LOG-12: decimals is an on-chain constant. A low-fidelity source that DEFAULTS decimals
+             -- (Arkham missing->0, Bitquery->18) must not clobber a chain-reported value, or every USD
+             -- valuation of the asset scales by 10^±d into the court report. So: once a real (>0) value
+             -- is established, never downgrade/change it; a placeholder 0 may still be filled from a
+             -- real later value. (0 is treated as "unknown/placeholder" — near-universal for tokens.)
+             decimals = CASE WHEN asset.decimals > 0    THEN asset.decimals
+                             WHEN excluded.decimals > 0 THEN excluded.decimals
+                             ELSE asset.decimals END""",
         (asset.id, asset.chain, asset.contract_address, asset.symbol, asset.decimals, source_query_id),
     )
     row = conn.execute(
@@ -107,8 +114,24 @@ def upsert_address(conn, address: Address, source_query_id: str | None) -> str:
     return row[0]
 
 
-def upsert_transaction(conn, tx: Transaction, source_query_id: str | None) -> str:
-    """Upsert a transaction on (chain, tx_hash). A FINAL existing row is frozen (no update)."""
+def upsert_transaction(conn, tx: Transaction, source_query_id: str | None,
+                       *, authoritative: bool = False, update_status: bool = True) -> str:
+    """Upsert a transaction on (chain, tx_hash). A FINAL existing row is frozen (no update).
+
+    ``authoritative`` (LOG-13): a chain source (Esplora/Etherscan/Bitquery) reports the COMPLETE current
+    block state, so on a provisional re-fetch its block_height/block_ts REPLACE the stored values even to
+    NULL — a reorg→mempool eviction must not leave a confirmed-block + mempool-status hybrid. A partial
+    import (Arkham CSV, which carries no block_height/confirmations/status) leaves ``authoritative`` False,
+    so it only FILLS gaps (COALESCE) and never wipes a chain source's fields. Either way the refreshed row
+    re-cites the producing fetch's ``source_query_id`` (Invariant #3 — a fact points at the fetch that
+    produced its current values). Final rows are frozen, so their provenance never changes.
+
+    ``update_status`` (LOG-11): only the authoritative top-level feed may overwrite an existing row's
+    ``status``. Etherscan's ``txlistinternal`` (a sub-call's isError) and ``tokentx`` (a blanket success)
+    pass ``update_status=False`` so they cannot clobber ``txlist``'s top-level status on a provisional row
+    (a succeeded tx whose first internal call reverted must stay ``success``). It only gates the conflict
+    update — an INSERT still records whatever status the sole feed carries (an internal-only tx).
+    """
     _require_provenance(source_query_id, "transaction_")
     existing = conn.execute(
         "SELECT id, finality_status FROM transaction_ WHERE chain=? AND tx_hash=?",
@@ -116,18 +139,27 @@ def upsert_transaction(conn, tx: Transaction, source_query_id: str | None) -> st
     ).fetchone()
     if existing is not None and existing["finality_status"] == "final":
         return existing["id"]  # immutable once final (Invariant #6) — refetch is a no-op
+    if authoritative:
+        block_set = ("block_height  = excluded.block_height,\n"
+                     "             block_ts      = excluded.block_ts,\n"
+                     "             confirmations = excluded.confirmations,")
+    else:
+        block_set = ("block_height  = COALESCE(excluded.block_height, transaction_.block_height),\n"
+                     "             block_ts      = COALESCE(excluded.block_ts, transaction_.block_ts),\n"
+                     "             confirmations = COALESCE(excluded.confirmations, transaction_.confirmations),")
+    status_set = ("COALESCE(excluded.status, transaction_.status)" if update_status
+                  else "transaction_.status")
     conn.execute(
-        """INSERT INTO transaction_
+        f"""INSERT INTO transaction_
              (id, chain, tx_hash, block_height, block_ts, fee, status, confirmations,
               finality_status, source_query_id)
            VALUES (?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(chain, tx_hash) DO UPDATE SET
-             block_height    = COALESCE(excluded.block_height, block_height),
-             block_ts        = COALESCE(excluded.block_ts, block_ts),
-             fee             = COALESCE(excluded.fee, fee),
-             status          = COALESCE(excluded.status, status),
-             confirmations   = excluded.confirmations,
-             finality_status = excluded.finality_status""",
+             {block_set}
+             fee             = COALESCE(excluded.fee, transaction_.fee),
+             status          = {status_set},
+             finality_status = excluded.finality_status,
+             source_query_id = excluded.source_query_id""",
         (tx.id, tx.chain, tx.tx_hash, tx.block_height, tx.block_ts, tx.fee, tx.status,
          tx.confirmations, tx.finality_status, source_query_id),
     )
@@ -171,9 +203,12 @@ def upsert_tx_output(conn, out: TxOutput, source_query_id: str | None) -> str:
              (id, transaction_id, address_id, amount, output_index, spent, spending_tx_id,
               source_query_id)
            VALUES (?,?,?,?,?,?,?,?)
+           -- LOG-01: the refresh is MONOTONIC — re-fetching a shared funding tx (whose outputs are
+           -- re-upserted with the default spent=0) must never reset a known spend to unspent, nor drop
+           -- a recorded spender. MAX keeps spent at 1 once set; COALESCE keeps the first known spender.
            ON CONFLICT(transaction_id, output_index) DO UPDATE SET
-             spent          = excluded.spent,
-             spending_tx_id = excluded.spending_tx_id""",
+             spent          = MAX(tx_output.spent, excluded.spent),
+             spending_tx_id = COALESCE(tx_output.spending_tx_id, excluded.spending_tx_id)""",
         (out.id, out.transaction_id, out.address_id, out.amount, out.output_index, out.spent,
          out.spending_tx_id, source_query_id),
     )
@@ -201,6 +236,131 @@ def upsert_tx_input(conn, txin: TxInput, source_query_id: str | None) -> str:
         (txin.transaction_id, txin.input_index),
     ).fetchone()
     return row[0]
+
+
+def insert_erc20_approval(conn, a, source_query_id: str | None) -> str:
+    """Insert an ERC-20 Approval event (LOG-06). Insert-once on (chain, owner, spender, asset, tx_hash) so
+    a re-fetch is idempotent (Invariant #7) — a given owner→spender allowance for a token in one tx."""
+    _require_provenance(source_query_id, "erc20_approval")
+    existing = conn.execute(
+        "SELECT id FROM erc20_approval WHERE chain=? AND owner_address_id=? AND spender_address_id=? "
+        "AND COALESCE(asset_id,'')=COALESCE(?,'') AND COALESCE(tx_hash,'')=COALESCE(?,'')",
+        (a.chain, a.owner_address_id, a.spender_address_id, a.asset_id, a.tx_hash)).fetchone()
+    if existing is not None:
+        return existing[0]
+    conn.execute(
+        """INSERT INTO erc20_approval
+             (id, chain, owner_address_id, spender_address_id, asset_id, amount, block_height, tx_hash,
+              retrieved_at, source_query_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (a.id, a.chain, a.owner_address_id, a.spender_address_id, a.asset_id, a.amount, a.block_height,
+         a.tx_hash, a.retrieved_at, source_query_id),
+    )
+    return a.id
+
+
+# --------------------------------------------------------------------------- reorg cleanup (COR-01)
+
+def _placeholders(n: int) -> str:
+    return ",".join("?" * n)
+
+
+def _tx_has_investigator_refs(conn, tx_id: str, transfer_ids: list[str], output_ids: list[str]) -> bool:
+    """True if an INVESTIGATOR object (annotation / tag / display label / finding_ref) references the tx or
+    any of its movements. Deriving policy (COR-01, derived-only): the reorg sweep will cascade DERIVED data
+    (valuations, machine trace links) but must NEVER silently destroy investigator work — so a tx the
+    investigator personally annotated/tagged/labeled/put a finding on is PRESERVED + reported instead."""
+    for table, type_col, id_col in (("annotation", "target_type", "target_id"),
+                                    ("tag", "target_type", "target_id"),
+                                    ("investigator_label", "target_type", "target_id"),
+                                    ("finding_ref", "ref_type", "ref_id")):
+        clauses = [f"({type_col}='transaction' AND {id_col}=?)"]
+        params: list = [tx_id]
+        if transfer_ids:
+            clauses.append(f"({type_col}='transfer' AND {id_col} IN ({_placeholders(len(transfer_ids))}))")
+            params += transfer_ids
+        if output_ids:
+            clauses.append(f"({type_col}='tx_output' AND {id_col} IN ({_placeholders(len(output_ids))}))")
+            params += output_ids
+        if conn.execute(f"SELECT 1 FROM {table} WHERE {' OR '.join(clauses)} LIMIT 1", params).fetchone():
+            return True
+    return False
+
+
+def _delete_transaction_with_derived(conn, tx_id: str, transfer_ids: list[str], output_ids: list[str]) -> None:
+    """FK-safe delete of a reorged-out provisional tx + its DERIVED dependents (COR-01, derived-only policy;
+    the caller guarantees no INVESTIGATOR refs via ``_tx_has_investigator_refs``). Order: derived rows
+    (valuations of its movements, machine trace links) → spend-link cleanup → Family-A children → the tx.
+    So no dangling valuation/trace remains (the `no-dangling-fk` audit + FKs stay green)."""
+    movement_ids = transfer_ids + output_ids
+    if movement_ids:  # valuations of this tx's movements — a valuation of a reorged movement is void
+        conn.execute(f"DELETE FROM valuation WHERE subject_id IN ({_placeholders(len(movement_ids))})",
+                     movement_ids)
+    if transfer_ids:  # EVM trace edges over its transfers
+        conn.execute(f"DELETE FROM trace_transfer WHERE transfer_id IN ({_placeholders(len(transfer_ids))})",
+                     transfer_ids)
+    # BTC trace links naming this tx or its outputs (source/dest)
+    conn.execute(
+        "DELETE FROM trace_btc_link WHERE transaction_id=?"
+        + (f" OR source_output_id IN ({_placeholders(len(output_ids))})"
+           f" OR dest_output_id IN ({_placeholders(len(output_ids))})" if output_ids else ""),
+        [tx_id] + output_ids + output_ids)
+    # Outputs THIS tx spent revert to unspent (its spends are void — it was reorged out).
+    conn.execute("UPDATE tx_output SET spent=0, spending_tx_id=NULL WHERE spending_tx_id=?", (tx_id,))
+    # Inputs of OTHER txs that pointed at this tx's outputs lose their prev-output link (the output is gone).
+    if output_ids:
+        conn.execute(
+            f"UPDATE tx_input SET prev_output_id=NULL WHERE prev_output_id IN ({_placeholders(len(output_ids))})",
+            output_ids)
+    conn.execute("DELETE FROM transfer  WHERE transaction_id=?", (tx_id,))
+    conn.execute("DELETE FROM tx_input  WHERE transaction_id=?", (tx_id,))
+    conn.execute("DELETE FROM tx_output WHERE transaction_id=?", (tx_id,))
+    conn.execute("DELETE FROM transaction_ WHERE id=?", (tx_id,))
+
+
+def sweep_reorged_provisional(conn, *, chain: str, address: str, present_tx_hashes: set[str],
+                              source_query_id: str | None) -> dict:
+    """COR-01: on a COMPLETE address re-fetch, delete the PROVISIONAL transactions (and their Family-A
+    children) that reference ``address`` on ``chain`` but are ABSENT from the fresh set — a reorged/
+    replaced tx (Invariant #6's correctable side; the documented counterpart to "never freeze tip data").
+
+    Final rows are never touched. The CALLER must only invoke this after a NON-PARTIAL fetch — a bounded
+    page legitimately omits txs. The deletion runs inside the fetch's provenance transaction
+    (``source_query_id``).
+
+    Deletion policy (COR-01, **derived-only, preserve human work**): a reorged tx is deleted with its
+    Family-A children AND its DERIVED dependents (valuations of its movements, machine trace links). But if
+    an INVESTIGATOR personally annotated / tagged / labeled it or put a finding on it, the tx is PRESERVED
+    and reported under ``skipped_referenced`` — investigator work is never silently destroyed (the operator
+    decides). Returns ``{"deleted": [tx_hash…], "skipped_referenced": [tx_hash…]}``."""
+    _require_provenance(source_query_id, "transaction_")
+    canonical = canonical_address(chain, address)
+    row = conn.execute("SELECT id FROM address WHERE chain=? AND address=?", (chain, canonical)).fetchone()
+    if row is None:
+        return {"deleted": [], "skipped_referenced": []}
+    address_id = row["id"]
+    candidates = conn.execute(
+        """SELECT DISTINCT t.id, t.tx_hash FROM transaction_ t
+             WHERE t.chain=? AND t.finality_status='provisional' AND t.id IN (
+               SELECT transaction_id FROM tx_input  WHERE address_id=?
+               UNION SELECT transaction_id FROM tx_output WHERE address_id=?
+               UNION SELECT transaction_id FROM transfer WHERE from_address_id=? OR to_address_id=?
+             )""",
+        (chain, address_id, address_id, address_id, address_id)).fetchall()
+    deleted, skipped = [], []
+    for cand in candidates:
+        if cand["tx_hash"] in present_tx_hashes:
+            continue
+        transfer_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM transfer WHERE transaction_id=?", (cand["id"],)).fetchall()]
+        output_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM tx_output WHERE transaction_id=?", (cand["id"],)).fetchall()]
+        if _tx_has_investigator_refs(conn, cand["id"], transfer_ids, output_ids):
+            skipped.append(cand["tx_hash"])   # preserve human work — the operator decides
+            continue
+        _delete_transaction_with_derived(conn, cand["id"], transfer_ids, output_ids)
+        deleted.append(cand["tx_hash"])
+    return {"deleted": deleted, "skipped_referenced": skipped}
 
 
 # --------------------------------------------------------------------------- Family B: claims
@@ -404,6 +564,13 @@ def insert_trace(conn, t: Trace, now: str | None = None) -> str:
 
 
 def insert_trace_transfer(conn, tt: TraceTransfer) -> str:
+    # LOG-07: insert-once on (trace_id, transfer_id) — re-adding the same edge to a trace is a no-op
+    # (mirrors the claim tables' idiom), so trace construction is re-run-safe.
+    existing = conn.execute(
+        "SELECT id FROM trace_transfer WHERE trace_id=? AND transfer_id=?",
+        (tt.trace_id, tt.transfer_id)).fetchone()
+    if existing is not None:
+        return existing[0]
     conn.execute(
         "INSERT INTO trace_transfer (id, trace_id, transfer_id, ordering, note) VALUES (?,?,?,?,?)",
         (tt.id, tt.trace_id, tt.transfer_id, tt.ordering, tt.note),
@@ -412,6 +579,16 @@ def insert_trace_transfer(conn, tt: TraceTransfer) -> str:
 
 
 def insert_trace_btc_link(conn, link: TraceBtcLink) -> str:
+    # LOG-07: insert-once on (trace_id, transaction_id, source_output_id, dest_output_id, basis) — re-running
+    # FIFO or re-adding a manual link on the same trace does not append duplicate rows (which would
+    # double-count the linkage in the report/graph).
+    existing = conn.execute(
+        "SELECT id FROM trace_btc_link WHERE trace_id=? AND transaction_id=? "
+        "AND source_output_id=? AND dest_output_id=? AND basis=?",
+        (link.trace_id, link.transaction_id, link.source_output_id, link.dest_output_id, link.basis),
+    ).fetchone()
+    if existing is not None:
+        return existing[0]
     conn.execute(
         """INSERT INTO trace_btc_link
              (id, trace_id, transaction_id, source_output_id, dest_output_id, basis, confidence,

@@ -18,7 +18,7 @@
 ;     survive an uninstall (and a reinstall). See the closing note at the bottom of this file.
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.2.0"
 #endif
 ; Absolute path to the built one-folder app (dist/BIH). Fallback assumes ISCC is run from installer/.
 #ifndef MySourceDir

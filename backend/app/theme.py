@@ -24,9 +24,44 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 from urllib.parse import quote
 
 from .app_paths import resource_path
+
+# --- SEC-12: <style>-interpolation safety -----------------------------------------------------------
+# Every token value is emitted verbatim into the report's inline `<style>` (css_root_block). Bundled
+# tokens are all hex colors or sizing numerics, but the planned customize-UI "will override token values"
+# (module docstring) — so any value bound for `<style>` is validated so it cannot break out of the style
+# element (</style>), open a nested rule/at-rule, or inject a url()/expression() sink.
+_HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\Z")
+_FUNC_COLOR_RE = re.compile(r"(?:rgb|rgba|hsl|hsla)\(\s*[0-9.,%/\s]+\)\Z", re.IGNORECASE)
+_NAMED_COLOR_RE = re.compile(r"[a-zA-Z]{1,40}\Z")
+_CSS_BREAKOUT_RE = re.compile(r"[<>{};]|</?style|url\(|expression\(|@import|/\*", re.IGNORECASE)
+
+
+def validate_color_value(value) -> bool:
+    """Strict CSS-color grammar for a value bound for the report's inline ``<style>`` (SEC-12). Accepts a
+    hex color, ``rgb()``/``rgba()``/``hsl()``/``hsla()``, or a bare CSS color name; rejects anything that
+    could escape the style context (``</style>``, ``;``, ``}``, ``url(...)``, ``expression(...)``, angle
+    brackets). The customize-UI must run user color overrides through this before they reach the report."""
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v or len(v) > 64:
+        return False
+    return bool(_HEX_COLOR_RE.match(v) or _FUNC_COLOR_RE.match(v) or _NAMED_COLOR_RE.match(v))
+
+
+def _css_value_safe(value) -> str:
+    """A token value bound for the report's inline ``<style>`` must not carry a CSS/style breakout.
+    Bundled tokens are all hex/sizing numerics (safe); this fails LOUD if a future/overridden value could
+    escape the ``<style>`` element (SEC-12) rather than emitting a poisoned stylesheet into a court
+    artifact."""
+    s = str(value)
+    if _CSS_BREAKOUT_RE.search(s):
+        raise ValueError(f"unsafe token value for <style> interpolation: {value!r}")
+    return s
 
 # tokens.json — a bundled READ-ONLY resource (P7): the single color catalog the report's print-light set
 # also reads. _MEIPASS/... when frozen, else repo-root/... in source (via resource_path).
@@ -98,7 +133,7 @@ def css_var_name(token_id: str) -> str:
 
 def css_root_block() -> str:
     """Every token as a CSS custom property under ``:root`` (consumed by report.css's var(--bih-...))."""
-    lines = "\n".join(f"  {css_var_name(tid)}: {value};" for tid, value in _tokens().items())
+    lines = "\n".join(f"  {css_var_name(tid)}: {_css_value_safe(value)};" for tid, value in _tokens().items())
     return f":root {{\n{lines}\n}}\n"
 
 

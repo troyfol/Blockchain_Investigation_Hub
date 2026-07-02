@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -24,6 +25,57 @@ from uuid import uuid4
 from ..models import SourceQuery
 
 RAW_SUBDIR = "raw_responses"
+
+
+def _fsync_replace(temp_path: Path, dst: Path) -> None:
+    """Durable atomic promote (RES-03): fsync the staged bytes, atomically rename into place, then
+    best-effort fsync the directory so the rename survives a crash. ``Path.replace`` is atomic on POSIX
+    and Windows; the directory fsync is a no-op where unsupported (e.g. Windows)."""
+    try:
+        with open(temp_path, "rb") as fh:
+            os.fsync(fh.fileno())
+    except OSError:
+        pass
+    temp_path.replace(dst)
+    try:
+        dfd = os.open(str(dst.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except (OSError, AttributeError):
+        pass  # directory fsync unsupported here — the rename itself is still atomic
+
+
+def sweep_stale_raw_tmp(db_dir: Path | str) -> int:
+    """RES-03: remove leftover ``raw_responses/*.tmp`` stragglers (a staged file whose write never
+    committed, e.g. after a hard crash). Best-effort; returns the number removed."""
+    d = Path(db_dir) / RAW_SUBDIR
+    if not d.exists():
+        return 0
+    removed = 0
+    for tmp in d.glob("*.tmp"):
+        try:
+            tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def orphan_raw_refs(conn) -> list[str]:
+    """RES-03: any committed ``source_query.raw_response_ref`` with no on-disk file — a torn write left a
+    provenance row pointing at a payload that was never promoted. Read-only; returns the missing refs."""
+    db_dir = _db_dir(conn)
+    if db_dir is None:
+        return []
+    missing = []
+    for r in conn.execute(
+            "SELECT raw_response_ref FROM source_query WHERE raw_response_ref IS NOT NULL").fetchall():
+        ref = r[0]
+        if not (db_dir / ref).exists():
+            missing.append(ref)
+    return missing
 
 
 def _to_bytes(raw_response: bytes | str | dict | list) -> bytes:
@@ -98,18 +150,27 @@ def write_with_provenance(
 
     sp = "sp_" + uuid4().hex[:12]
     conn.execute(f"SAVEPOINT {sp}")
+    promoted = False
     try:
         _insert_source_query(conn, source_query, raw_ref, raw_hash)
         result = write_fn(conn, sq_id)
+        # RES-03: promote the staged raw file BEFORE the commit point (RELEASE), with an fsync'd rename.
+        # Previously it was promoted AFTER the DB commit, so a crash in that window left a committed
+        # source_query whose raw_response_ref pointed at a never-promoted file (a torn DB/filesystem
+        # write). Now the file exists whenever its row does; the only residue of a crash is a harmless
+        # orphan file with no row (swept by `sweep_stale_raw_tmp` / reported by `orphan_raw_refs`).
+        if temp_path is not None and raw_path is not None:
+            _fsync_replace(temp_path, raw_path)
+            promoted = True
         conn.execute(f"RELEASE {sp}")
     except Exception:
         conn.execute(f"ROLLBACK TO {sp}")
         conn.execute(f"RELEASE {sp}")
-        if temp_path is not None and temp_path.exists():
+        # roll the file back too — the promoted target if we got that far, else the staged temp
+        if promoted and raw_path is not None and raw_path.exists():
+            raw_path.unlink()
+        elif temp_path is not None and temp_path.exists():
             temp_path.unlink()
         raise
 
-    # Committed — promote the staged raw file into place (atomic rename).
-    if temp_path is not None and raw_path is not None:
-        temp_path.replace(raw_path)
     return sq_id, result

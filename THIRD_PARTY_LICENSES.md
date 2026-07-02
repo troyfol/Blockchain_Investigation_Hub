@@ -5,7 +5,9 @@ records the licenses of the third-party dependencies and **why the project licen
 copyleft claim is accurate and nothing GPL ships under a misleading permissive label.
 
 > Regenerate the Python side with `python -m piplicenses --format=markdown --order=license`; the frontend
-> side with the node tally in `PROGRESS.md` (P10). Versions below are the v1.0.0 build set.
+> side with the node tally in `PROGRESS.md` (P10). Versions below are the v1.2.0 build set — the
+> dependency set is unchanged since v1.0.0 (R6/R6.1 added no runtime dependency); exact pins live in
+> `requirements.lock` (SEC-14).
 
 ## Why GPL-3.0 (not MIT)
 
@@ -22,8 +24,12 @@ GPLv2-**only** would have been *incompatible* with GPLv3; igraph's `LICENSE` car
 other dependency is permissive (MIT / BSD / Apache-2.0 / MPL-2.0 / PSF / ISC), all of which are
 GPLv3-compatible. There are **no GPLv2-only or proprietary runtime dependencies**.
 
-`python-igraph` remains an **optional** extra (`pip install -e ".[clustering]"`); when it is absent the
-community overlay degrades to a clear "unavailable" note and the rest of the app is unaffected.
+`python-igraph` is a **shipped runtime dependency**: it (and its `texttable` dep) IS bundled into the
+frozen one-folder build for Leiden community detection (SEC-07, corrected R6-2026-07-02 — an earlier note
+called it a never-bundled "optional extra"; `bih.spec` does not exclude it). Its GPL-2.0-or-later license is
+compatible with this project's GPL-3.0 and disclosed below. For a source checkout it installs via
+`pip install -e ".[clustering]"`; if it is ever absent the community overlay degrades to a clear
+"unavailable" note and the rest of the app is unaffected.
 
 ## Python runtime dependencies (shipped in the frozen app)
 
@@ -34,7 +40,7 @@ community overlay degrades to a clear "unavailable" note and the rest of the app
 | Apache-2.0 | yoyo-migrations, importlib_metadata |
 | MPL-2.0 | certifi |
 | PSF-2.0 | typing_extensions |
-| **GPL-2.0-or-later** | **igraph** (optional — Leiden community detection) + texttable (its dep) |
+| **GPL-2.0-or-later** | **igraph** (shipped — Leiden community detection) + texttable (its dep) |
 
 ## Frontend runtime dependencies (bundled into `frontend/dist`)
 

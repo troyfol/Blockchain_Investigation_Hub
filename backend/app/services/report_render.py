@@ -67,20 +67,26 @@ def _first_existing(paths: list[str]) -> "str | None":
     return next((p for p in paths if Path(p).exists()), None)
 
 
-def find_engine() -> "tuple[str, str] | None":
-    """Locate an OS Chromium engine to print with. Returns ``(name, exe_path)`` or ``None``.
+def find_engines() -> "list[tuple[str, str]]":
+    """Locate every OS Chromium engine that could print, in preference order. Returns
+    ``[(name, exe_path), ...]`` (possibly empty).
 
-    ``BIH_REPORT_RENDERER`` overrides the choice: ``edge`` / ``chrome`` / ``chromium`` pin an engine,
-    ``playwright`` forces the optional fallback (handled in :func:`render_pdf`), ``none`` forces the
-    no-renderer path (so a test can deterministically exercise the clean skip), ``auto`` (default)
-    probes Edge then Chrome/Chromium."""
-    choice = os.environ.get("BIH_REPORT_RENDERER", "auto").strip().lower()
+    ``BIH_REPORT_RENDERER`` overrides the choice: ``edge`` / ``chrome`` / ``chromium`` pin an engine
+    (the list then holds at most that one), ``playwright`` forces the optional fallback (handled in
+    :func:`render_pdf`), ``none`` forces the no-renderer path (so a test can deterministically
+    exercise the clean skip), ``auto`` (default) lists Edge first (the WebView2 engine the desktop
+    launcher already uses) then Chrome/Chromium — ``render_pdf`` tries them ALL, so one broken
+    engine can no longer mask a working one right next to it (review finding BASE-01)."""
+    raw = os.environ.get("BIH_REPORT_RENDERER", "auto").strip()
+    choice = raw.lower()
     if choice in ("none", "playwright"):
-        return None
+        return []
 
-    # An explicit absolute path wins (operator override for an unusual install).
-    if choice and Path(choice).exists():
-        return ("custom", choice)
+    # An explicit path wins (operator override for an unusual install). Checked/returned with the
+    # operator's ORIGINAL casing — paths are case-sensitive on Linux/macOS, so lowercasing first
+    # would silently break a valid pin.
+    if raw and Path(raw).exists():
+        return [("custom", raw)]
 
     edge = (_first_existing(_WIN_EDGE) if sys.platform == "win32"
             else (_first_existing(_MAC_CHROME[2:]) if sys.platform == "darwin"
@@ -90,22 +96,39 @@ def find_engine() -> "tuple[str, str] | None":
                     else next((shutil.which(n) for n in _NIX_NAMES if shutil.which(n)), None)))
 
     if choice in ("edge",):
-        return ("edge", edge) if edge else None
+        return [("edge", edge)] if edge else []
     if choice in ("chrome", "chromium"):
-        return ("chrome", chrome) if chrome else None
-    # auto: prefer Edge (the WebView2 engine), then any Chrome/Chromium/Edge on PATH.
+        return [("chrome", chrome)] if chrome else []
+    engines: "list[tuple[str, str]]" = []
     if edge:
-        return ("edge", edge)
-    if chrome:
-        return ("chrome", chrome)
-    return None
+        engines.append(("edge", edge))
+    # On Linux/macOS an Edge-only machine can resolve BOTH probes to the same binary (Edge is in
+    # the generic Chromium name lists) — never list one executable twice.
+    if chrome and chrome != edge:
+        engines.append(("chrome", chrome))
+    return engines
+
+
+def find_engine() -> "tuple[str, str] | None":
+    """The preferred OS engine — first of :func:`find_engines`, or ``None`` (availability checks)."""
+    engines = find_engines()
+    return engines[0] if engines else None
 
 
 def renderer_available() -> bool:
-    """True if a PDF can be rendered this run (an OS engine, or Playwright when forced/available)."""
+    """True if a PDF can be rendered this run — mirrors :func:`render_pdf`'s decision tree exactly
+    (including ``BIH_REPORT_RENDERER`` pins), so an availability probe can never say yes when the
+    render path itself would refuse (e.g. a pinned-but-absent engine does NOT fall back to
+    Playwright, and neither does this check)."""
+    choice = os.environ.get("BIH_REPORT_RENDERER", "auto").strip().lower()
+    if choice == "none":
+        return False
+    if choice == "playwright":
+        return _playwright_available()
     if find_engine() is not None:
         return True
-    return _playwright_available()
+    pinned = choice not in ("auto", "")
+    return (not pinned) and _playwright_available()
 
 
 def _playwright_available() -> bool:
@@ -154,6 +177,10 @@ def _render_with_engine(exe: str, html_path: Path, pdf_path: Path, *, budget_ms:
     try:
         # A generous timeout; a hung engine must not wedge report generation.
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        # Surface a hang as the check-next-path signal (NoRendererError), never as a raw
+        # TimeoutExpired that would skip the remaining engines and crash report generation.
+        raise NoRendererError(f"engine {exe!r} hung (no exit within 120 s) — killed, no PDF produced")
     finally:
         shutil.rmtree(profile, ignore_errors=True)
     if not (out.exists() and out.stat().st_size > 0):
@@ -185,9 +212,16 @@ def _render_with_playwright(html_path: Path, pdf_path: Path) -> None:
 
 
 def render_pdf(html_path, pdf_path) -> str:
-    """Render ``html_path`` to ``pdf_path`` with the first available engine. Returns the engine name.
+    """Render ``html_path`` to ``pdf_path``, trying EVERY available render path before giving up
+    (review finding BASE-01: a broken preferred engine must not mask a working one): each discovered
+    OS engine at the standard budget, then one bigger-budget retry for dense-style failures
+    (P8.7.1 #3), then the optional Playwright fallback. An explicitly pinned engine
+    (``BIH_REPORT_RENDERER=edge|chrome|chromium|<path>``) is honored strictly — its failure
+    surfaces; nothing silently unpins it. Returns the name of the engine that rendered.
 
-    Raises :class:`NoRendererError` when nothing can render (the caller then keeps the HTML-only report).
+    Raises :class:`NoRendererError` when nothing can render (:class:`DenseRenderError` when every
+    path failed dense-style — the view itself likely never settled); the caller then keeps the
+    HTML-only report.
     """
     html_path, pdf_path = Path(html_path), Path(pdf_path)
     choice = os.environ.get("BIH_REPORT_RENDERER", "auto").strip().lower()
@@ -201,21 +235,52 @@ def render_pdf(html_path, pdf_path) -> str:
         _render_with_playwright(html_path, pdf_path)
         return "playwright"
 
-    engine = find_engine()
-    if engine is not None:
+    pinned = choice not in ("auto", "")  # edge / chrome / chromium / explicit path
+    engines = find_engines()
+    attempts: "list[tuple[str, str, NoRendererError]]" = []  # (name, exe, first-pass failure)
+    failures: "list[tuple[str, NoRendererError]]" = []
+
+    # Pass 1 — every engine at the standard budget. BASE-01: Edge 149 headless printed nothing even
+    # for a trivial page while the Chrome beside it worked; trying only the first engine turned a
+    # broken preference into "no PDF at all".
+    for name, exe in engines:
         try:
-            _render_with_engine(engine[1], html_path, pdf_path, budget_ms=12000)
-        except DenseRenderError:
-            # exit-0-but-no-PDF on a dense graph: RETRY ONCE with a much larger budget before giving up
-            # (P8.7.1 #3). Still raises DenseRenderError if it can't settle even then -> actionable skip.
-            _render_with_engine(engine[1], html_path, pdf_path, budget_ms=40000)
-        return engine[0]
+            _render_with_engine(exe, html_path, pdf_path, budget_ms=12000)
+            return name
+        except NoRendererError as exc:
+            attempts.append((name, exe, exc))
+            failures.append((name, exc))
 
-    # auto fall-through: no OS engine, but Playwright might be installed.
-    if _playwright_available():
-        _render_with_playwright(html_path, pdf_path)
-        return "playwright"
+    # Pass 2 — dense-style failures (exit 0, no PDF) get ONE bigger-budget retry (P8.7.1 #3): a
+    # genuinely dense view needs more virtual time; a broken engine just fails again quickly.
+    for name, exe, exc in attempts:
+        if isinstance(exc, DenseRenderError):
+            try:
+                _render_with_engine(exe, html_path, pdf_path, budget_ms=40000)
+                return name
+            except NoRendererError as exc2:
+                failures.append((name, exc2))
 
+    # Playwright fallback — also when engines exist but ALL failed, not only when none are
+    # installed. A pinned engine is an operator decision: never silently unpin it.
+    if not pinned and _playwright_available():
+        try:
+            _render_with_playwright(html_path, pdf_path)
+            return "playwright"
+        except Exception as exc:  # keep the 'HTML produced, PDF skipped' contract — never crash the report
+            failures.append(("playwright", NoRendererError(f"Playwright fallback failed: {exc}")))
+
+    if failures:
+        reasons = "; ".join(f"{name}: {exc}" for name, exc in failures)
+        if all(isinstance(exc, DenseRenderError) for _, exc in failures):
+            raise DenseRenderError(f"no engine rendered the view within budget — {reasons}")
+        raise NoRendererError(f"every render path failed — {reasons}")
+
+    if pinned:
+        raise NoRendererError(
+            f"BIH_REPORT_RENDERER={choice!r} pins an engine that was not found on this machine — "
+            f"unset it (auto-discovery) or point it at an installed Edge/Chrome. The report HTML "
+            f"(the hashed source of truth) was still written.")
     raise NoRendererError(
         "no PDF engine found — install Microsoft Edge or Google Chrome (the report prints with the OS "
         "browser engine), or `pip install -e \".[dev]\"` for the Playwright fallback. The report HTML "

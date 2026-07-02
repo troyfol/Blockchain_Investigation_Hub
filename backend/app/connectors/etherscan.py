@@ -19,14 +19,17 @@ from datetime import datetime
 from .base import BaseHttpConnector, ConnectorError, RateLimitError, UpstreamError, filter_supported_bounds
 from ..db import repository as repo
 from ..db.repository import utc_now_iso
-from ..models import Address, SourceQuery, Transfer
+from ..models import Address, Asset, Erc20Approval, SourceQuery, Transfer
 from ..normalization.canonical import canonical_address
 from ..normalization.reconcile import assign_occurrences
 from ..normalization.etherscan_adapter import (
+    APPROVAL_TOPIC0,
+    adapt_approval_logs,
     adapt_balance,
     adapt_tokentx,
     adapt_txlist,
     adapt_txlistinternal,
+    owner_topic,
 )
 from ..provenance.atomic import write_with_provenance
 
@@ -191,20 +194,23 @@ class EtherscanConnector(BaseHttpConnector):
 
     # --- writers -------------------------------------------------------------------------
 
-    def _addr_id(self, conn, sqid, chain, canonical):
+    def _addr_id(self, conn, sqid, chain, canonical, display=None):
         if not canonical:
             return None
-        return repo.upsert_address(conn, Address(chain=chain, address_display=canonical), sqid)
+        # COR-02: pass the SOURCE display form (EIP-55 checksum) to the repository, which derives the
+        # canonical key AND preserves the checksum in address_display. Falls back to canonical.
+        return repo.upsert_address(conn, Address(chain=chain, address_display=display or canonical), sqid)
 
-    def _write_parsed(self, conn, sqid, parsed) -> dict:
+    def _write_parsed(self, conn, sqid, parsed, *, update_status: bool = True) -> dict:
         assign_occurrences(parsed)  # content+occurrence dedup key (decision (c)) before the DB write
         n_tx = n_tr = 0
         for pt in parsed:
-            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid)
+            tx_id = repo.upsert_transaction(conn, pt.transaction, sqid, authoritative=True,
+                                            update_status=update_status)
             n_tx += 1
             for tr in pt.transfers:
-                from_id = self._addr_id(conn, sqid, tr.chain, tr.from_address)
-                to_id = self._addr_id(conn, sqid, tr.chain, tr.to_address)
+                from_id = self._addr_id(conn, sqid, tr.chain, tr.from_address, tr.from_address_display)
+                to_id = self._addr_id(conn, sqid, tr.chain, tr.to_address, tr.to_address_display)
                 asset_id = repo.upsert_asset(conn, tr.asset, sqid)
                 repo.upsert_transfer(conn, Transfer(
                     transaction_id=tx_id, chain=tr.chain, from_address_id=from_id, to_address_id=to_id,
@@ -248,8 +254,19 @@ class EtherscanConnector(BaseHttpConnector):
         if top_n is not None:
             self._filter_top_n_counterparties(parsed_by, address, int(top_n))
 
+        # COR-01: a COMPLETE fetch (no feed truncated, no skipped bounds) whose fresh set omits a stored
+        # PROVISIONAL tx means that tx was reorged/replaced — sweep it on the LAST feed's write (below).
+        # Gated on completeness: a bounded/partial pull legitimately omits txs.
+        any_partial = bool(skipped) or any(collected[a][2] for a in ("txlist", "txlistinternal", "tokentx"))
+        present = {pt.transaction.tx_hash for a in ("txlist", "txlistinternal", "tokentx")
+                   for pt in parsed_by[a]}
+
         summary = {}
-        for action in ("txlist", "txlistinternal", "tokentx"):  # txlist first: authoritative tx fields
+        # txlist FIRST: it owns the authoritative tx fields (and freezes the row once final). LOG-11:
+        # only txlist may write the tx `status` — txlistinternal's status is a SUB-call's outcome and
+        # tokentx's is a blanket `success`, so both pass update_status=False and never clobber txlist's
+        # top-level status on a still-provisional row.
+        for action in ("txlist", "txlistinternal", "tokentx"):
             payloads, rows, partial = collected[action]
             parsed = parsed_by[action]
             now = utc_now_iso()
@@ -262,9 +279,18 @@ class EtherscanConnector(BaseHttpConnector):
                 status="partial" if (partial or skipped) else "ok",
                 result_summary=f"{len(rows)} rows, {len(parsed)} txs",
             )
-            _, res = write_with_provenance(
-                conn, sq, lambda c, sqid, p=parsed: self._write_parsed(c, sqid, p),
-                raw_response=payloads)
+            do_sweep = (action == "tokentx") and not any_partial
+
+            def _write(c, sqid, p=parsed, a=action, sweep=do_sweep):
+                out = self._write_parsed(c, sqid, p, update_status=(a == "txlist"))
+                if sweep:
+                    swept = repo.sweep_reorged_provisional(
+                        c, chain=chain, address=address, present_tx_hashes=present, source_query_id=sqid)
+                    if swept["deleted"] or swept["skipped_referenced"]:
+                        out["reorged"] = swept
+                return out
+
+            _, res = write_with_provenance(conn, sq, _write, raw_response=payloads)
             summary[action] = res
         return summary
 
@@ -288,3 +314,59 @@ class EtherscanConnector(BaseHttpConnector):
 
         _, bid = write_with_provenance(conn, sq, write, raw_response=payload)
         return bid
+
+    def get_erc20_approvals(self, conn, chain: str, address: str, bounds: dict | None = None) -> dict:
+        """LOG-06: fetch the ERC-20 ``Approval`` events where ``address`` is the OWNER (getLogs filtered by
+        topic0=Approval + topic1=owner), decode owner/spender/token, and write ``erc20_approval`` rows — the
+        data the EVM self-authorization clustering heuristic needs (previously it always no-op'd on an empty
+        table). Re-fetch is idempotent (insert-once). Bounds: ``block_range`` + ``max_pages`` (rest skipped,
+        recorded, marks partial)."""
+        applied, skipped = filter_supported_bounds(bounds, {"block_range", "max_pages"})
+        address = canonical_address(chain, address)
+        start, end = self._block_range(applied)
+        max_pages = applied.get("max_pages")
+        payloads: list = []
+        rows: list[dict] = []
+        partial = False
+        page = 1
+        while True:
+            params = {"chainid": self._chainid(chain), "module": "logs", "action": "getLogs",
+                      "topic0": APPROVAL_TOPIC0, "topic1": owner_topic(chain, address),
+                      "fromBlock": start, "toBlock": end, "page": page, "offset": self.page_size,
+                      "apikey": self.api_key}
+            payload = self.get(params).json()
+            payloads.append(payload)
+            page_rows = self._envelope_rows(payload)
+            rows.extend(page_rows)
+            if len(page_rows) < self.page_size:
+                break
+            page += 1
+            if max_pages is not None and page > max_pages:
+                partial = True
+                break
+
+        parsed = adapt_approval_logs(rows, chain=chain)
+        now = utc_now_iso()
+        sq = SourceQuery(
+            connector=self.name, capability="get_erc20_approvals", endpoint="getLogs",
+            params={"address": address, "chainid": self._chainid(chain),
+                    "bounds": dict(applied) if applied else "default",
+                    **({"skipped_bounds": skipped} if skipped else {})},
+            requested_at=now, completed_at=now, status="partial" if (partial or skipped) else "ok",
+            result_summary=f"{len(rows)} logs, {len(parsed)} approvals")
+
+        def write(c, sqid):
+            n = 0
+            for a in parsed:
+                owner_id = self._addr_id(c, sqid, chain, a["owner"])
+                spender_id = self._addr_id(c, sqid, chain, a["spender"])
+                asset_id = repo.upsert_asset(c, Asset(chain=chain, contract_address=a["token"], decimals=0), sqid)
+                repo.insert_erc20_approval(c, Erc20Approval(
+                    chain=chain, owner_address_id=owner_id, spender_address_id=spender_id,
+                    asset_id=asset_id, amount=a["amount"], block_height=a["block_height"],
+                    tx_hash=a["tx_hash"], retrieved_at=now), sqid)
+                n += 1
+            return {"approvals": n}
+
+        _, res = write_with_provenance(conn, sq, write, raw_response=payloads)
+        return res

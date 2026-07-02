@@ -57,8 +57,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 
 from ..models import Asset, Transaction
-from .canonical import canonical_address
-from .etherscan_adapter import NATIVE_SYMBOL, ParsedTransaction, ParsedTransfer
+from .canonical import canonical_address, to_canonical_ts
+from .etherscan_adapter import NATIVE_SYMBOL, ParsedTransaction, ParsedTransfer, _display_or_none
 
 # Account-model (EVM) chains we can faithfully map to `transfer` — mirrors the EVM chains the system
 # knows (NATIVE_SYMBOL, incl. bsc). Everything else falls into one of two DISTINCT rejection classes:
@@ -124,7 +124,7 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
     """
     notes = {"rows": 0, "transfers": 0, "skipped": 0, "rounded_amounts": 0, "type_present": 0,
              "tokenid_present": 0, "rejected_utxo": [], "rejected_unsupported": [], "errors": []}
-    by_tx: dict[str, ParsedTransaction] = {}
+    by_tx: dict[tuple[str, str], ParsedTransaction] = {}  # (chain, tx_hash) — LOG-10
     pos: dict[tuple, int] = {}
 
     for idx, row in enumerate(rows):
@@ -169,18 +169,24 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
 
         if rounded:
             notes["rounded_amounts"] += 1
-        if tx_hash not in by_tx:
-            by_tx[tx_hash] = ParsedTransaction(transaction=Transaction(
+        # LOG-10: key on (chain, tx_hash), NOT the hash alone — an EVM tx hash replayed across two chains
+        # in one multichain export must NOT collapse into a single transaction on the first-seen chain
+        # (which loses the second chain's tx and makes transfer.chain != transaction_.chain).
+        tx_key = (chain, tx_hash)
+        if tx_key not in by_tx:
+            by_tx[tx_key] = ParsedTransaction(transaction=Transaction(
                 chain=chain, tx_hash=tx_hash, block_height=block_height,
-                block_ts=(row.get("blockTimestamp") or "").strip() or None,
+                block_ts=to_canonical_ts(row.get("blockTimestamp")),  # LOG-05: one canonical format
                 fee=None, status=None, confirmations=None, finality_status="provisional"))
 
-        key = (tx_hash, transfer_type)
+        key = (chain, tx_hash, transfer_type)
         position = pos.get(key, 0)
         pos[key] = position + 1
-        by_tx[tx_hash].transfers.append(ParsedTransfer(
+        by_tx[tx_key].transfers.append(ParsedTransfer(
             chain=chain, from_address=from_addr, to_address=to_addr,
-            asset=asset, amount=amount, transfer_type=transfer_type, position=position))
+            asset=asset, amount=amount, transfer_type=transfer_type, position=position,
+            from_address_display=_display_or_none(row.get("fromAddress")),  # COR-02: keep EIP-55 checksum
+            to_address_display=_display_or_none(row.get("toAddress"))))
         notes["transfers"] += 1
 
     return list(by_tx.values()), notes

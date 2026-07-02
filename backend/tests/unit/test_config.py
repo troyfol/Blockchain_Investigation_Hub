@@ -11,7 +11,9 @@ def test_defaults_load():
     assert s.esplora_enabled is True
     assert s.defillama_enabled is True
     assert s.allow_plaintext_keys is False
-    assert s.cache_ttl_days == 30
+    # LOG-08: cache_ttl_days / etherscan_paid_tier were removed (dead keys, no readers).
+    assert not hasattr(s, "cache_ttl_days")
+    assert not hasattr(s, "etherscan_paid_tier")
 
 
 def test_finality_thresholds_defaults():
@@ -36,10 +38,8 @@ def test_finality_threshold_unknown_chain_is_conservative():
 
 def test_env_override(monkeypatch):
     monkeypatch.setenv("BIH_ETHERSCAN_ENABLED", "0")
-    monkeypatch.setenv("BIH_CACHE_TTL_DAYS", "7")
     s = Settings()
     assert s.etherscan_enabled is False
-    assert s.cache_ttl_days == 7
 
 
 def test_partial_finality_override_keeps_settled_defaults(monkeypatch):

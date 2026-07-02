@@ -50,6 +50,11 @@ class ParsedTransfer:
     transfer_type: str         # native|internal|erc20
     position: int              # source-reported display ordinal
     occurrence: int = 0        # set by normalization.reconcile.assign_occurrences before the DB write
+    # COR-02: the SOURCE display form (EIP-55 checksum) so the repository choke-point preserves it in
+    # `address_display` while still keying on the canonical form. None → fall back to the canonical form
+    # (the connector passes `from_address_display or from_address` to upsert_address).
+    from_address_display: str | None = None
+    to_address_display: str | None = None
 
 
 @dataclass
@@ -66,6 +71,63 @@ def _canon_or_none(chain: str, addr: str | None) -> str | None:
     if not addr or not str(addr).strip():
         return None
     return canonical_address(chain, addr)
+
+
+# ERC-20 Approval(address indexed owner, address indexed spender, uint256 value) — LOG-06.
+# topic0 = keccak256("Approval(address,address,uint256)") (confirmed via 4byte.directory).
+APPROVAL_TOPIC0 = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+
+
+def _topic_address(chain: str, topic: str | None) -> str | None:
+    """A 32-byte indexed-address topic left-pads the 20-byte address — take the last 40 hex chars."""
+    h = (topic or "").lower().removeprefix("0x")
+    if len(h) < 40:
+        return None
+    try:
+        return canonical_address(chain, "0x" + h[-40:])
+    except ValueError:
+        return None
+
+
+def owner_topic(chain: str, address: str) -> str:
+    """The 32-byte left-padded topic for filtering getLogs by the approval OWNER (topic1)."""
+    return "0x" + canonical_address(chain, address)[2:].rjust(64, "0")
+
+
+def adapt_approval_logs(rows: list[dict], *, chain: str) -> list[dict]:
+    """Decode Etherscan getLogs ``Approval`` rows → ``{owner, spender, token, amount, block_height,
+    tx_hash}`` (owner/spender/token canonical, amount as base-unit text). Non-Approval / malformed rows
+    are skipped."""
+    out = []
+    for r in rows:
+        topics = r.get("topics") or []
+        if len(topics) < 3 or (topics[0] or "").lower() != APPROVAL_TOPIC0:
+            continue
+        owner = _topic_address(chain, topics[1])
+        spender = _topic_address(chain, topics[2])
+        if not owner or not spender:
+            continue
+        try:
+            token = canonical_address(chain, r["address"])
+        except (KeyError, ValueError):
+            continue
+        try:
+            amount = str(int((r.get("data") or "0x0"), 16))
+        except (ValueError, TypeError):
+            amount = None
+        try:
+            block = int(r["blockNumber"], 16)
+        except (KeyError, ValueError, TypeError):
+            block = None
+        out.append({"owner": owner, "spender": spender, "token": token, "amount": amount,
+                    "block_height": block, "tx_hash": r.get("transactionHash")})
+    return out
+
+
+def _display_or_none(addr: str | None) -> str | None:
+    """The trimmed SOURCE form of an address (EIP-55 checksum preserved), or None (COR-02)."""
+    s = str(addr).strip() if addr is not None else ""
+    return s or None
 
 
 def native_asset(chain: str) -> Asset:
@@ -136,7 +198,9 @@ def adapt_txlist(rows: list[dict], *, chain: str, tip_height: int | None,
             pt.transfers.append(ParsedTransfer(
                 chain=chain, from_address=_canon_or_none(chain, row.get("from")),
                 to_address=_canon_or_none(chain, row.get("to")), asset=native_asset(chain),
-                amount=row["value"], transfer_type="native", position=0))
+                amount=row["value"], transfer_type="native", position=0,
+                from_address_display=_display_or_none(row.get("from")),
+                to_address_display=_display_or_none(row.get("to"))))
         out.append(pt)
     return out
 
@@ -159,7 +223,9 @@ def adapt_txlistinternal(rows: list[dict], *, chain: str, tip_height: int | None
             by_tx[h].transfers.append(ParsedTransfer(
                 chain=chain, from_address=_canon_or_none(chain, row.get("from")),
                 to_address=_canon_or_none(chain, row.get("to")), asset=native_asset(chain),
-                amount=row["value"], transfer_type="internal", position=position))
+                amount=row["value"], transfer_type="internal", position=position,
+                from_address_display=_display_or_none(row.get("from")),
+                to_address_display=_display_or_none(row.get("to"))))
     return list(by_tx.values())
 
 
@@ -179,7 +245,9 @@ def adapt_tokentx(rows: list[dict], *, chain: str, tip_height: int | None,
         by_tx[h].transfers.append(ParsedTransfer(
             chain=chain, from_address=_canon_or_none(chain, row.get("from")),
             to_address=_canon_or_none(chain, row.get("to")), asset=asset,
-            amount=row["value"], transfer_type="erc20", position=position))
+            amount=row["value"], transfer_type="erc20", position=position,
+            from_address_display=_display_or_none(row.get("from")),
+            to_address_display=_display_or_none(row.get("to"))))
     return list(by_tx.values())
 
 

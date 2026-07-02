@@ -153,7 +153,10 @@ def test_set_address_label_endpoint_updates_graph(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    node = next(n for n in body["graph"]["nodes"] if n["id"] == addr_node["id"])
+    assert "graph" not in body  # EFF-01: no discarded full graph — the client refetches the view
+    # The label took effect: refetch the graph (as the UI's loadView() does) and confirm.
+    g2 = client.get("/api/graph").json()
+    node = next(n for n in g2["nodes"] if n["id"] == addr_node["id"])
     assert node["label"] == "renamed wallet" and node["custom_label"] is True
 
 

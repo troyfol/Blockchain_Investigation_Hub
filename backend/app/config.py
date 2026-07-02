@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # --- Connectors: EVM (Etherscan V2) ---
     etherscan_enabled: bool = True
     etherscan_base_url: str = "https://api.etherscan.io/v2/api"
-    etherscan_paid_tier: bool = False
+    # (LOG-08) `etherscan_paid_tier` removed R6 — it had zero readers (never affected rate limit/endpoints).
 
     # --- Connectors: Bitcoin (Esplora) ---
     esplora_enabled: bool = True
@@ -96,8 +96,8 @@ class Settings(BaseSettings):
     # The ONLY non-keyring path for secrets; loud opt-in (see secrets.py).
     allow_plaintext_keys: bool = False
 
-    # --- Cache / policy knobs ---
-    cache_ttl_days: int = 30
+    # (LOG-08) `cache_ttl_days` removed R6 — it had zero readers and the shared cache has no cached_at/ttl
+    # (the documented TTL/expiry subsystem was never built); see schema.md §6.
 
     # Per-chain finality thresholds. A BIH_FINALITY_THRESHOLDS (JSON) override is *merged
     # onto* the defaults (see validator) so a partial override like {"polygon": 200} cannot

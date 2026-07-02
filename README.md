@@ -15,8 +15,8 @@ every number came from.
 
 This README is the comprehensive orientation for **developers and LLMs**: §1–§3 are the product;
 **§4 onward is the architecture deep-dive** (invariants, data model, connectors, services, audits, code
-map). The machine-checked contract every change must uphold lives in **`CLAUDE.md`**; the build journal in
-**`PROGRESS.md`**; per-area docs in **`docs/`**.
+map). The machine-checked contract every change must uphold lives in **`CLAUDE.md`**; per-area docs in
+**`docs/`**.
 
 ---
 
@@ -27,13 +27,9 @@ A real end-to-end run on the OFAC-sanctioned **Tornado Cash** router
 Leiden community overlay → a curated, bounded report. The artifacts below ship with the release in
 [`examples/Sample_Tornado_Cash/`](examples/Sample_Tornado_Cash/).
 
-[![Tornado Cash — curated investigation graph (print-light exhibit)](examples/Sample_Tornado_Cash/exhibit.png)](examples/Sample_Tornado_Cash/exhibit.svg)
-
-*Curated current-view exhibit (print-light palette). Vector: [`exhibit.svg`](examples/Sample_Tornado_Cash/exhibit.svg). The sanctioned anchor carries a red halo + "Tornado Cash" ring; thousands of same-pair movements collapse into one "… ×N" edge so the mixer stays legible.*
-
 <img width="1882" height="1016" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/95edb7f8-ea64-4d2f-afb4-273bf9a88a01" />
 
-*Stylized in-app view.*
+*The sanctioned anchor carries a red halo + "Tornado Cash" ring; thousands of same-pair movements collapse into one "… ×N" edge so the mixer stays legible. Stylized in-app view.*
 
 
 - **Report:** [`report.html`](examples/Sample_Tornado_Cash/report.html) (self-contained, hash-verified) ·
@@ -636,7 +632,7 @@ frontend/                  React 19 + Cytoscape.js (Vite) — investigation grap
                            size-aware layout (cose small / fcose large). API: /api/graph, /api/view, /api/cases*, /api/settings*
 docs/                      overview, schema, connectors, algorithms, testing, phases/, findings/, validation/
 scripts/                   setup, dev_run, launch (pywebview), report, export, set_key, clean
-Makefile  pyproject.toml  CLAUDE.md (the contract)  PROGRESS.md (journal)  docs/BUILD_INDEX.md (build map)
+Makefile  pyproject.toml  CLAUDE.md (the contract)  docs/BUILD_INDEX.md (build map)
 ```
 
 ---
@@ -654,7 +650,7 @@ Makefile  pyproject.toml  CLAUDE.md (the contract)  PROGRESS.md (journal)  docs/
 - **Adding a schema change:** a new forward-only numbered migration, bump `schema_version`, and keep the
   idempotency-audit natural key in sync.
 - **Definition of Done:** `make test && make audit && make smoke` all green, with a test that *fails* if a
-  touched invariant breaks. Update `PROGRESS.md`.
+  touched invariant breaks.
 
 ---
 

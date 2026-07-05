@@ -75,7 +75,14 @@ def get_secret(name: str) -> str | None:
                 PLAINTEXT_ENV_FLAG,
             )
             return value
-    return keyring.get_password(SERVICE, name)
+    try:
+        return keyring.get_password(SERVICE, name)
+    except keyring.errors.KeyringError:
+        # No USABLE backend (e.g. headless Linux / CI with no Secret Service): keyring's `fail` backend
+        # RAISES on every call rather than returning None. Degrade to "no key stored" so a read can never
+        # crash a request — /health -> paid_status -> get_secret must not 500 when the backend is absent.
+        # keyring_status() surfaces the unavailable backend loudly; this keeps reads honest + non-fatal.
+        return None
 
 
 def set_secret(name: str, value: str) -> None:

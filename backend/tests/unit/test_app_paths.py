@@ -39,11 +39,17 @@ def frozen(tmp_path, monkeypatch):
 
 def test_source_mode_resolves_repo_resources():
     assert ap.is_frozen() is False
-    # In source the bundle root is the repo root and every bundled resource exists there.
+    # In source the bundle root is the repo root and each bundled resource RESOLVES there.
     repo_root = Path(__file__).resolve().parents[3]
     assert ap.bundle_dir() == repo_root
-    for rel in ap.BUNDLED_RESOURCES.values():
-        assert ap.resource_path(rel).exists(), f"{rel} missing in source bundle"
+    for key, rel in ap.BUNDLED_RESOURCES.items():
+        p = ap.resource_path(rel)
+        assert p == repo_root / rel, f"{rel} resolves outside the repo root"
+        # `frontend/dist` is a BUILD output (`npm run build`), not a committed source file — it is absent in
+        # a fresh checkout / CI (which installs deps but does not build the SPA). Its bundling is exercised by
+        # the packaging + frozen-smoke path; here we require existence only of the committed source resources.
+        if key != "frontend_dist":
+            assert p.exists(), f"{rel} missing in source bundle"
 
 
 # --------------------------------------------------------------------------- frozen: resources in bundle

@@ -27,7 +27,7 @@ A real end-to-end run on the OFAC-sanctioned **Tornado Cash** router
 Leiden community overlay → a curated, bounded report. The artifacts below ship with the release in
 [`examples/Sample_Tornado_Cash/`](examples/Sample_Tornado_Cash/).
 
-<img width="1882" height="1016" alt="tornado_screenshot" src="https://github.com/user-attachments/assets/95edb7f8-ea64-4d2f-afb4-273bf9a88a01" />
+<img width="1882" alt="Tornado Cash sample investigation in the Blockchain Investigation Hub" src="examples/Sample_Tornado_Cash/tornado_screenshot_II.png" />
 
 *The sanctioned anchor carries a red halo + "Tornado Cash" ring; thousands of same-pair movements collapse into one "… ×N" edge so the mixer stays legible. Stylized in-app view.*
 

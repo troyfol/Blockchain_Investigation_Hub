@@ -51,9 +51,10 @@ def test_version_tuple_is_4_part_and_matches_version_string():
 def test_version_info_resource_is_not_metadata_blank():
     """Build the same VSVersionInfo bih.spec embeds and assert the identity strings are present — a blank
     resource is a major SmartScreen/AV red flag, so the metadata must actually populate it."""
-    vi = importlib.util.find_spec("PyInstaller.utils.win32.versioninfo")
-    if vi is None:  # PyInstaller not installed in this env
-        pytest.skip("PyInstaller not available")
+    # PyInstaller is a build-time tool (absent in CI / a lean install) — skip cleanly when it isn't there.
+    # NB find_spec() on a SUBMODULE raises ModuleNotFoundError when the PARENT package is absent (it doesn't
+    # return None), so the old `if find_spec(...) is None` guard errored instead of skipping. importorskip is right.
+    pytest.importorskip("PyInstaller.utils.win32.versioninfo")
     from PyInstaller.utils.win32.versioninfo import (
         FixedFileInfo,
         StringFileInfo,

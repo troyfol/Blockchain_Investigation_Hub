@@ -271,7 +271,7 @@ def test_forget_removes_from_list_but_not_disk(client):
 # --------------------------------------------------------------------------- native file dialog
 
 def test_pick_path_maps_kinds_and_normalizes_result():
-    import webview
+    webview = pytest.importorskip("webview")  # native dialogs need pywebview (the 'app' extra) — skip without it
 
     from backend.app.services import dialogs
 
@@ -304,6 +304,7 @@ def test_dialog_endpoint_501_in_browser_mode(client):
 
 
 def test_dialog_endpoint_runs_registered_window(client):
+    pytest.importorskip("webview")  # the endpoint calls dialogs.pick_path -> import webview (pywebview absent in CI)
     from backend.app.services import cases
 
     class FakeWindow:

@@ -11,7 +11,7 @@ in production (no key at build to record a response); the field reads are defens
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Canonical chain -> MisTrack `coin` query value. Risk is per-blockchain; `coin` selects the chain.
 # TODO: confirm the full coin list (MisTrack also has token-specific coins like USDT-TRC20).
@@ -23,11 +23,19 @@ RISK_SCORE_SCALE = "3-100"  # NOT 0-100 — MisTrack scores run 3..100 (reconcil
 
 
 @dataclass
+class MisTrackRiskDetail:
+    signal: str                # the risk_type of one nested risk_detail[] entry (e.g. 'mixer','sanctions')
+    score: float | None        # `percent` exposure share as the sub-signal score (TODO: confirm vs volume)
+    score_scale: str = "percent"  # NOT the 3-100 risk score — this is an exposure % (TODO: confirm)
+
+
+@dataclass
 class MisTrackRisk:
     score: float | None
     score_scale: str
     category: str | None       # the dominant risk_type (by percent); full breakdown kept in rationale
     rationale: str | None      # risk_level + detail_list + the raw risk_detail breakdown
+    details: list[MisTrackRiskDetail] = field(default_factory=list)  # FN-15: structured per-sub-signal rows
 
 
 @dataclass
@@ -75,9 +83,20 @@ def adapt_risk(data: dict) -> MisTrackRisk | None:
         primary = max(detail_dicts, key=lambda d: d.get("percent") or 0)
     category = primary.get("risk_type") if isinstance(primary, dict) else None
 
+    # FN-15: each nested risk_detail[] entry -> a structured sub-signal row (signal=risk_type, score=percent).
+    # Scaffold — gated on a key for LIVE use; the mapping is synthetic-testable now (field names TODO: confirm).
+    details = []
+    for d in detail_dicts:
+        rt = d.get("risk_type")
+        if not rt:
+            continue
+        pct = d.get("percent")
+        details.append(MisTrackRiskDetail(
+            signal=str(rt), score=float(pct) if isinstance(pct, (int, float)) else None))
+
     return MisTrackRisk(
         score=float(score) if isinstance(score, (int, float)) else None,
-        score_scale=RISK_SCORE_SCALE, category=category, rationale=rationale)
+        score_scale=RISK_SCORE_SCALE, category=category, rationale=rationale, details=details)
 
 
 def adapt_labels(data: dict) -> list[MisTrackLabel]:

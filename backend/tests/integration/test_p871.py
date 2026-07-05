@@ -204,11 +204,52 @@ def test_report_html_has_cy_ready_timeout_fallback():
 
     ctx = {"title": "t", "case": {"title": "c"}, "generated_at": "2026-01-01T00:00:00Z",
            "scope_spec": {"selection": "full-case"}, "graph": {"nodes": [], "edges": []},
-           "traces": [], "findings": [], "notes": [], "risk": [], "entities": [],
+           "methodology": {"finality_thresholds": []},
+           "traces": [], "findings": [], "exhibits": [], "notes": [], "risk": [], "entities": [],
+           "custody": [],
            "valuation": {"movements": 0, "valued": 0, "missing": 0, "multi_source": 0}}
     page = render_html(ctx)
     assert "setTimeout(done, 8000)" in page            # hard-timeout fallback armed
     assert "finally { done(); }" in page                # ready set after the synchronous run, always
+
+
+# --------------------------------------------------------------------------- P35 report twin edge arrows
+
+def test_report_twin_edge_kinds_have_distinct_arrow_shapes():
+    """P35/UX-02 — the report's Python cytoscape twin distinguishes the three fact-edge kinds by a SECOND,
+    color-independent channel: distinct target-arrow shapes (triangle / tee / vee), in lockstep with
+    theme.ts::buildCytoscapeStyle — so they read apart on a grayscale court print, not by hue alone."""
+    from backend.app.theme import cytoscape_style
+
+    style = cytoscape_style()
+    shapes = {
+        kind: next(r for r in style if r["selector"] == f'edge[kind="{kind}"]')["style"].get("target-arrow-shape")
+        for kind in ("transfer", "tx_input", "tx_output")
+    }
+    assert all(shapes.values()), f"every fact-edge kind must set an explicit arrow shape: {shapes}"
+    assert len(set(shapes.values())) == 3, f"the three edge kinds must have DISTINCT arrow shapes: {shapes}"
+
+
+# --------------------------------------------------------------------------- P36 report twin dash families
+
+def test_report_twin_dash_families_are_distinct():
+    """P36/UX-04 — the report twin gives the dash MEANING families distinct line-dash-patterns (provisional =
+    finality · fifo/investigator = trace convention), in lockstep with theme.ts, so a dashed edge decodes on
+    paper without guessing."""
+    from backend.app.theme import cytoscape_style
+
+    style = cytoscape_style()
+
+    def pat(selector):
+        return next(r for r in style if r["selector"] == selector)["style"].get("line-dash-pattern")
+
+    prov = pat('edge[finality_status="provisional"]')
+    fifo = pat('edge[trace="fifo"]')
+    inv = pat('edge[trace="investigator"]')
+    for p in (prov, fifo, inv):
+        assert p, f"each dashed family must set an explicit line-dash-pattern: prov={prov} fifo={fifo} inv={inv}"
+    assert tuple(prov) != tuple(fifo), "provisional (finality) and fifo (trace convention) must read apart"
+    assert tuple(fifo) != tuple(inv), "fifo and investigator must differ within the trace family"
 
 
 # --------------------------------------------------------------------------- #6 report twin z-lift

@@ -167,6 +167,39 @@ def test_adapter_native_and_rounding():
     assert notes["rounded_amounts"] == 1
 
 
+def test_adapter_flags_truncation_risk_below_decimals():
+    # FN-24 (P19) — decision (a) honesty caveat: when Arkham's DISPLAY unitValue carries FEWER fractional
+    # digits than the asset's decimals, the low-order base units are display-rounded (not source-verified).
+    # That yields an INTEGRAL product, so the existing `rounded` flag MISSES it — it must be surfaced as a
+    # distinct truncation risk so the figure is never taken as silently authoritative (chain re-fetch = exact).
+    rows = [
+        # 18-decimal native shown to 4 dp -> low-order 14 base digits unknown -> truncation risk (integral).
+        _row(transactionHash="0xT", tokenAddress="", tokenSymbol="ETH", tokenDecimals="18", unitValue="1.2346"),
+        # 6-decimal token shown to full 6 dp -> exact -> neither rounded NOR a truncation risk.
+        _row(transactionHash="0xE", tokenAddress="0x" + "a" * 40, tokenSymbol="USDC", tokenDecimals="6",
+             unitValue="10.500000"),
+        # a whole-number 18-dp native (0 fractional digits < 18) -> also low-order-lossy -> flagged.
+        _row(transactionHash="0xW", tokenAddress="", tokenSymbol="ETH", tokenDecimals="18", unitValue="5"),
+        # a zero-value movement -> nothing to lose -> NOT flagged (no false noise).
+        _row(transactionHash="0xZ", tokenAddress="", tokenSymbol="ETH", tokenDecimals="18", unitValue="0"),
+    ]
+    bundles, notes = adapt_arkham_transfers(rows)
+    amounts = {b.transaction.tx_hash: b.transfers[0].amount for b in bundles}
+    assert amounts["0xT"] == "1234600000000000000"    # recorded at display precision, not dropped
+    assert amounts["0xE"] == "10500000"               # exact
+    assert notes["truncation_risk"] == 2              # 0xT and 0xW; NOT 0xE (exact) nor 0xZ (zero)
+    assert notes["rounded_amounts"] == 0              # none is the >decimals rounding case
+
+
+def test_adapter_rounding_is_not_double_counted_as_truncation():
+    # A display value with MORE precision than the asset decimals is `rounded` (product non-integral),
+    # which is a DIFFERENT signal from truncation (fewer digits than decimals) — never both for one row.
+    rows = [_row(transactionHash="0xR", tokenAddress="0x" + "a" * 40, tokenSymbol="X", tokenDecimals="6",
+                 unitValue="1.2345678")]  # 7 dp into a 6-dp token
+    _, notes = adapt_arkham_transfers(rows)
+    assert notes["rounded_amounts"] == 1 and notes["truncation_risk"] == 0
+
+
 def test_adapter_classifies_utxo_vs_unsupported():
     btc_multi = _row(transactionHash="0xbtc1", chain="bitcoin", tokenAddress="", tokenSymbol="BTC",
                      tokenDecimals="8", unitValue="0.001", fromAddress="bc1aaa,bc1bbb", type="inflow")

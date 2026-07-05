@@ -55,7 +55,7 @@ def _default_env(tmp_path, monkeypatch):
 def test_fresh_db_migrates_full_schema(tmp_path):
     db_path = tmp_path / "case.db"
     applied = apply_migrations(db_path)
-    assert applied == 10  # 0001..0010 (0010 = P8.8 clustering: entity.origin widen + erc20_approval)
+    assert applied == 14  # 0001..0014 (0014 = P27/FN-19 audit_baseline anchor)
     # No case initialized yet -> no case_meta row -> schema_version reads 0.
     assert read_schema_version(db_path) == 0
 

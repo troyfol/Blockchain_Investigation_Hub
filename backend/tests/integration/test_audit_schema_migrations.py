@@ -185,10 +185,12 @@ def test_runner_rebaseline_flag_reestablishes_explicitly(case):
                           "ALTER TABLE transfer ADD COLUMN test_col TEXT")
     assert not _result(run_audits(db_path=str(db)), "final-immutability").passed
 
-    # Operator verified row content out-of-band → explicit, targeted re-baseline.
+    # Operator verified row content out-of-band → explicit, targeted re-baseline. The row content
+    # genuinely changed (the fake migration widened `transfer`), so P27 reports it as an operator
+    # re-baseline that advances the in-DB anchor to the re-verified state (not a first-time record).
     fi = _result(run_audits(db_path=str(db), rebaseline=["final-immutability"]),
                  "final-immutability")
-    assert fi.passed and "baseline recorded" in fi.detail
+    assert fi.passed and "re-baseline" in fi.detail
     assert _result(run_audits(db_path=str(db)), "final-immutability").passed  # green thereafter
 
     # And the re-established baseline still catches real tampering.

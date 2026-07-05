@@ -49,6 +49,10 @@ BUNDLED_RESOURCES = {
     # P8.7 intel starter snapshots (OFAC SDN + GraphSense TagPack) — ship so "Check intel" works offline.
     "intel_ofac_sdn": "backend/app/intel/ofac_sdn.xml",
     "intel_graphsense_tagpack": "backend/app/intel/graphsense_tagpack.yaml",
+    # P39 first-run sample: the PUBLIC Tornado Cash example .casefile, shipped so first-run "Explore the
+    # sample case" works with zero setup (imported read-only from the bundle, then extracted into the
+    # user's writable cases dir — never opened in place under _MEIPASS).
+    "sample_casefile": "examples/Sample_Tornado_Cash/Sample_Tornado_Cash.casefile",
 }
 
 

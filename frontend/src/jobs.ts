@@ -38,3 +38,10 @@ export function jobProgressLine(j: JobStatus | null): string {
   if (j.state === "canceled") return "Canceled.";
   return `Fetched ${j.requests} page${j.requests === 1 ? "" : "s"}.`;
 }
+
+// The determinate completion fraction (0..1) when a job reports a total (valuation "M of N"), else null:
+// ingest page-fetching has no up-front total, so the <Progress> bar renders indeterminate. (P29/UX-08.)
+export function jobProgressFraction(j: JobStatus | null): number | null {
+  if (!j || !j.total || j.total <= 0) return null;
+  return Math.max(0, Math.min(1, j.valued / j.total));
+}

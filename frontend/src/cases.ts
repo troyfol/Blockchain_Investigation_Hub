@@ -68,9 +68,29 @@ export function listCases(): Promise<CaseEntry[]> {
   return fetch("/api/cases").then(asJson).then((d) => (d.cases ?? []) as CaseEntry[]);
 }
 
-export function newCase(title: string, location?: string | null): Promise<{ active: CaseMeta | null; path: string }> {
+// P26/FN-22: a declarative case template — a scenario preset that pre-seeds a new case's methodology +
+// connectors (settings only, never facts). An absent/null template = today's from-scratch case.
+export type CaseTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  connectors: string[];
+  default_bounds: Record<string, number>;
+};
+
+export function fetchCaseTemplates(): Promise<CaseTemplate[]> {
+  return fetch("/api/case_templates")
+    .then(asJson)
+    .then((d) => (d.templates ?? []) as CaseTemplate[])
+    .catch(() => [] as CaseTemplate[]);   // templates are optional — a failure just offers no presets
+}
+
+export function newCase(title: string, location?: string | null, template?: string | null):
+    Promise<{ active: CaseMeta | null; path: string;
+              template?: { id: string; name: string; default_bounds: Record<string, number> } }> {
   return fetch("/api/cases/new", {
-    method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ title, location: location ?? null }),
+    method: "POST", headers: JSON_HEADERS,
+    body: JSON.stringify({ title, location: location ?? null, template: template ?? null }),
   }).then(asJson);
 }
 
@@ -89,6 +109,18 @@ export function importCaseByPath(path: string, allowUntrusted = false): Promise<
 export function importCaseUpload(file: Blob, filename: string, allowUntrusted = false): Promise<ImportResult> {
   const q = new URLSearchParams({ filename, allow_untrusted: String(allowUntrusted) });
   return fetch(`/api/cases/import-upload?${q.toString()}`, { method: "POST", body: file }).then(asJson);
+}
+
+// P39 — whether this build ships a bundled first-run sample case (drives the CasePicker's "Explore the
+// sample case" affordance). Never throws: a failure just means "no sample offered".
+export function sampleAvailable(): Promise<boolean> {
+  return fetch("/api/cases/sample").then(asJson).then((d) => Boolean(d.available)).catch(() => false);
+}
+
+// P39 — import + open the app's bundled sample case (one-click "Explore the sample case"). Same verify
+// gate + ImportResult shape as a user import.
+export function importSampleCase(): Promise<ImportResult> {
+  return fetch("/api/cases/import-sample", { method: "POST" }).then(asJson);
 }
 
 export function forgetCase(path: string): Promise<{ cases: CaseEntry[] }> {

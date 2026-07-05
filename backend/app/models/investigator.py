@@ -52,6 +52,43 @@ class TraceBtcLink(BaseModel):
     note: str | None = None
 
 
+class TraceTransferRetraction(BaseModel):
+    """Append-only retraction of an EVM trace edge (FN-04). A Family-C investigator construction (no
+    ``source_query_id``); the edge row is never deleted — this row withdraws it from the effective trace."""
+
+    id: str = Field(default_factory=_new_id)
+    trace_transfer_id: str
+    reason: str
+    source: str = "investigator"
+
+
+class TraceBtcLinkRetraction(BaseModel):
+    """Append-only retraction of a Bitcoin trace link (FN-04). Mirrors :class:`TraceTransferRetraction`."""
+
+    id: str = Field(default_factory=_new_id)
+    trace_btc_link_id: str
+    reason: str
+    source: str = "investigator"
+
+
+class TraceBridgeLink(BaseModel):
+    """A manual CROSS-CHAIN bridge crossing inside a trace (FN-17): the investigator asserts that an outflow
+    movement on chain A corresponds to an inflow movement on chain B. A ``basis='investigator'`` CLAIM, never
+    a synthesized ``transfer``/ledger fact (Invariant #5) — each side is a poly ref to a value movement
+    (``transfer`` | ``tx_output``). Family C: no ``source_query_id``. Automated detection stays rejected."""
+
+    id: str = Field(default_factory=_new_id)
+    trace_id: str
+    src_subject_type: Literal["transfer", "tx_output"]
+    src_subject_id: str
+    dst_subject_type: Literal["transfer", "tx_output"]
+    dst_subject_id: str
+    basis: Literal["investigator"] = "investigator"
+    confidence: float | None = None
+    ordering: int | None = None
+    note: str | None = None
+
+
 class Finding(BaseModel):
     id: str = Field(default_factory=_new_id)
     statement: str

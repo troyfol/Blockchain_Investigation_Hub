@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  type CaseEntry, type CaseMeta, type ImportResult, type Verdict,
-  caseLabel, chainSummary, forgetCase, importCaseByPath, importCaseUpload, importVerdict, isWindowed,
-  lastOpenedLabel, listCases, newCase, openCase, pickNative, shortenPath,
+  type CaseEntry, type CaseMeta, type CaseTemplate, type ImportResult, type Verdict,
+  caseLabel, chainSummary, fetchCaseTemplates, forgetCase, importCaseByPath, importCaseUpload,
+  importSampleCase, importVerdict, isWindowed, lastOpenedLabel, listCases, newCase, openCase, pickNative,
+  sampleAvailable, shortenPath,
 } from "./cases";
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // The Neo-Tokyo entry screen: New / Open / Import (.casefile, verified) / Recent. Shown full-screen
 // when no case is active, and as an overlay "Cases" switcher (onClose set) to change the active case.
@@ -58,13 +60,18 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [newLocation, setNewLocation] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<CaseTemplate[]>([]);   // P26: declarative case presets
+  const [template, setTemplate] = useState("");                     // "" = from scratch (no preset)
   const [openPath, setOpenPath] = useState("");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [sampleOk, setSampleOk] = useState(false);   // P39: this build ships a bundled sample case
   const pendingImport = useRef<PendingImport | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   const refreshRecent = useCallback(() => { listCases().then(setRecent).catch(() => setRecent([])); }, []);
   useEffect(() => { refreshRecent(); }, [refreshRecent]);
+  useEffect(() => { fetchCaseTemplates().then(setTemplates).catch(() => setTemplates([])); }, []);
+  useEffect(() => { sampleAvailable().then(setSampleOk).catch(() => setSampleOk(false)); }, []);
 
   // Run an async case operation with one busy/error envelope. The op either opens a case (-> onOpened)
   // or returns null (e.g. a cancelled native dialog) for a no-op.
@@ -83,7 +90,7 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
   const handleNew = () =>
     run(async () => {
       if (!title.trim()) { setErr("give the case a title"); return null; }
-      return (await newCase(title.trim(), newLocation)).active;
+      return (await newCase(title.trim(), newLocation, template || null)).active;
     });
 
   const handleOpenPath = (path: string) => run(async () => (await openCase(path)).active);
@@ -127,6 +134,11 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
 
   const handleImportFile = (file: File | undefined) => { if (file) doImport({ file }, false); };
 
+  // P39 — one-click first-run: import + open the app's bundled sample case (reuses the import verdict path,
+  // so a — very unlikely — verification issue on our own bundle still surfaces rather than silently opening).
+  const handleExploreSample = () =>
+    run(async () => { applyImport(await importSampleCase()); return null; });
+
   const handleOpenAnyway = () => {
     const src = pendingImport.current;
     if (!src) return;
@@ -143,12 +155,17 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
     position: "fixed", inset: 0, zIndex: 80, background: t("ui.app.bg"),
     display: "flex", alignItems: "flex-start", justifyContent: "center", overflow: "auto", padding: 28,
   };
+  const shellStyle: React.CSSProperties = {
+    width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: 16,
+  };
 
-  return (
-    <div style={backdrop} onClick={onClose ? (e) => { if (e.target === e.currentTarget) onClose(); } : undefined}>
-      <div style={{ width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
+  // Dialog semantics (role="dialog" + focus-trap + Esc) apply ONLY to the overlay "Cases" SWITCHER
+  // (onClose set). The full-screen empty state is the app's landing surface — not a modal — so it renders
+  // WITHOUT the dialog wrapper (P31).
+  const body = (
+    <>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 style={{ margin: 0, fontSize: 22, color: t("ui.text") }}>
+          <h1 id="cases-title" style={{ margin: 0, fontSize: 22, color: t("ui.text") }}>
             Blockchain <span style={{ color: t("node.seed.marker") }}>Investigation Hub</span>
           </h1>
           <span style={{ ...hint, marginLeft: "auto" }}>
@@ -170,12 +187,40 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
           </div>
         )}
 
+        {/* First-run: explore the bundled sample + a zero-setup sources nudge + the local-data reassurance.
+            Shown only on a fresh install (no cases yet) and only when a sample is actually bundled (P39). */}
+        {sampleOk && recent.length === 0 && (
+          <div style={{ ...card, borderColor: t("node.seed.marker") }}>
+            <p style={sectionTitle}>New here?</p>
+            <p style={{ ...hint, color: t("ui.text.secondary"), lineHeight: 1.5 }}>
+              Explore a ready-made investigation — the public <b style={{ color: t("ui.text") }}>Tornado Cash</b>{" "}
+              sample case. No keys, no setup: the free intelligence pillars (OFAC SDN, GraphSense) are already
+              on — add a free Etherscan key in Settings later to ingest EVM chains. Your case data stays on this
+              machine; nothing is ever uploaded.
+            </p>
+            <button style={{ ...primaryBtn, alignSelf: "flex-start" }} disabled={busy}
+                    onClick={handleExploreSample}>Explore the sample case</button>
+          </div>
+        )}
+
         {/* New */}
         <div style={card}>
           <p style={sectionTitle}>New case</p>
           <input style={field} placeholder="Case title (e.g. Acme Exchange theft 2026)" value={title}
                  disabled={busy} onChange={(e) => setTitle(e.target.value)}
                  onKeyDown={(e) => { if (e.key === "Enter") handleNew(); }} />
+          {templates.length > 0 && (
+            <>
+              <select style={field} value={template} disabled={busy}
+                      onChange={(e) => setTemplate(e.target.value)} aria-label="Case template">
+                <option value="">Start from scratch (no template)</option>
+                {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
+              </select>
+              {template && (
+                <p style={hint}>{templates.find((tpl) => tpl.id === template)?.description}</p>
+              )}
+            </>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {windowed ? (
               <button style={btn} disabled={busy} onClick={handleNewFolderNative}>Choose folder…</button>
@@ -270,7 +315,16 @@ export default function CasePicker({ active, onOpened, onClose }: Props) {
             </div>
           )}
         </div>
-      </div>
+    </>
+  );
+
+  return onClose ? (
+    <Modal onClose={onClose} backdropStyle={backdrop} containerStyle={shellStyle} labelledBy="cases-title">
+      {body}
+    </Modal>
+  ) : (
+    <div style={backdrop}>
+      <div style={shellStyle}>{body}</div>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Literal
 
 import tempfile
 
@@ -25,7 +26,7 @@ from .connectors.base import ConnectorError
 from .db.connection import get_connection
 from .runtime import configure_frozen_runtime
 from .services import investigator
-from .services.graph import build_graph
+from .services.graph import bound_subgraph, build_graph
 from .services.orchestrator import NoConnectorError, Orchestrator
 
 logger = logging.getLogger("bih.api")
@@ -160,11 +161,29 @@ def health() -> dict:
 
 
 @app.get("/api/graph")
-def api_graph(conn=Depends(get_case_conn)) -> dict:
-    """The FULL heterogeneous graph for the case, projected from v_value_movement (+ tx_input). This is
-    the truthful, unbounded projection (also what the report renders). For a DENSE case the app uses the
-    bounded /api/view instead — never auto-render the full graph for a high-degree node."""
-    return build_graph(conn)
+def api_graph(address_id: str | None = None, limit: int | None = None,
+              conn=Depends(get_case_conn)) -> dict:
+    """The FULL heterogeneous graph for the case, projected from v_value_movement (+ tx_input) — with
+    OPTIONAL scope/pagination (P25/FN-20) so a LEA-scale case need not return the whole case at once:
+
+    - ``?address_id=<id>`` bounds the projection to that address's NEIGHBOURHOOD (the two O(case) scans are
+      constrained to incident rows, reusing ``focus_incident`` — a real DB-scan bound, not just a payload trim).
+    - ``?limit=N`` returns at most the N highest-degree nodes as a bounded subgraph, plus a ``meta`` block
+      (``total_nodes``/``returned_nodes``/``truncated``).
+
+    With NEITHER param the response is byte-identical to before — the truthful, unbounded projection the
+    report renders. For interactive dense-case browsing the app still uses the bounded /api/view."""
+    focus = None
+    if address_id is not None:
+        if not conn.execute("SELECT 1 FROM address WHERE id=?", (address_id,)).fetchone():
+            raise HTTPException(status_code=404, detail=f"address {address_id!r} is not in this case")
+        focus = f"addr:{address_id}"
+    graph = build_graph(conn, focus_incident=focus)
+    if limit is not None:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be a positive integer")
+        graph = bound_subgraph(graph, limit)
+    return graph
 
 
 def _csv(s: str | None) -> list[str]:
@@ -282,6 +301,7 @@ def api_node_summary(node_id: str, conn=Depends(get_case_conn)) -> dict:
 class NewCaseBody(BaseModel):
     title: str
     location: str | None = None
+    template: str | None = None   # P26/FN-22: optional declarative preset id
 
 
 class OpenCaseBody(BaseModel):
@@ -317,18 +337,31 @@ def api_active_case() -> dict:
     return {"active": cases.active_meta()}
 
 
+@app.get("/api/case_templates")
+def api_case_templates() -> dict:
+    """The declarative case templates (P26/FN-22) for the New-case picker — each pre-seeds a scenario's
+    methodology stub + connectors + a first-ingest bound hint. Read-only; a template is optional."""
+    from .services.case_templates import list_templates
+
+    return {"templates": list_templates()}
+
+
 @app.post("/api/cases/new")
 def api_new_case(body: NewCaseBody) -> dict:
-    """Create a fresh case (folder + schema + case_meta), register it, and make it active."""
+    """Create a fresh case (folder + schema + case_meta), register it, and make it active. An optional
+    ``template`` (P26/FN-22) pre-seeds the case's methodology + scenario connectors (settings only)."""
     from .services import cases
 
     try:
-        res = cases.new_case(body.title, location=body.location)
+        res = cases.new_case(body.title, location=body.location, template=body.template)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"could not create the case folder: {exc}")
-    return {"ok": True, "created": True, "active": cases.active_meta(), "path": res["path"]}
+    out = {"ok": True, "created": True, "active": cases.active_meta(), "path": res["path"]}
+    if "template" in res:
+        out["template"] = res["template"]   # echo the applied preset (default_bounds hint for the first ingest)
+    return out
 
 
 @app.post("/api/cases/open")
@@ -410,6 +443,30 @@ async def api_import_case_upload(request: Request, filename: str = "imported.cas
             tmp_dir.rmdir()
         except OSError:
             pass
+    return _import_result(out)
+
+
+@app.get("/api/cases/sample")
+def api_sample_case() -> dict:
+    """Whether this build ships a bundled first-run sample case (P39). The CasePicker shows the
+    'Explore the sample case' affordance only when one is available."""
+    from .services import cases
+
+    return {"available": cases.sample_casefile_path() is not None}
+
+
+@app.post("/api/cases/import-sample")
+def api_import_sample_case() -> dict:
+    """Import + open the bundled first-run sample case (P39 'Explore the sample case') — same verify gate
+    and ImportResult shape as ``/api/cases/import``. 404 when this build ships no sample."""
+    from .services import cases
+
+    try:
+        out = cases.import_sample_case()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:  # SEC-05: an unsafe bundle rejected before inflating
+        raise HTTPException(status_code=400, detail=str(exc))
     return _import_result(out)
 
 
@@ -834,10 +891,56 @@ def api_address_claims(address_id: str, conn=Depends(get_case_conn)) -> dict:
         raise HTTPException(status_code=404, detail="address not found")
     claims = address_claims(conn, address_id)
     entities = [dict(r) for r in conn.execute(
-        """SELECT e.name, e.entity_type, e.origin, m.source, m.method, m.confidence, m.flags
+        """SELECT e.name, e.entity_type, e.origin, m.source, m.method, m.confidence, m.flags,
+                  m.source_query_id
            FROM entity_membership m JOIN entity e ON e.id=m.entity_id
            WHERE m.address_id=? ORDER BY m.source, e.name""", (address_id,)).fetchall()]
     return {**claims, "entities": entities}
+
+
+@app.get("/api/movement/{subject_id}/valuations")
+def api_movement_valuations(subject_id: str, conn=Depends(get_case_conn)) -> dict:
+    """Every valuation for a movement (transfer / tx_output), grouped by source and kept side-by-side —
+    never collapsed into one number or an average (Invariant #4). Powers the SidePanel's per-source value
+    stack on a contested movement (FN-03). An unvalued movement returns an empty map (an honest gap)."""
+    from .services.valuation_display import movement_valuations
+
+    return movement_valuations(conn, subject_id)
+
+
+@app.get("/api/disagreements")
+def api_disagreements(conn=Depends(get_case_conn)) -> dict:
+    """Every subject where sources DISAGREE (attribution label/category, risk category, or a movement's
+    valuation), each with the sources' claims side-by-side + the fields that differ + a node to navigate
+    to. The tool NEVER emits a winner or a merged/averaged value (Invariant #4) — adjudication is an
+    explicit investigator finding."""
+    from .services.disagreements import find_disagreements
+
+    return {"disagreements": find_disagreements(conn)}
+
+
+@app.get("/api/activity")
+def api_activity(conn=Depends(get_case_conn)) -> dict:
+    """The case activity timeline (P24/FN-14): one time-ordered log of every timestamped event — data
+    fetches (each `source_query`, covering ingest + valuation/enrichment) and the investigator's
+    constructions (traces, findings, annotations, tags, trace edits, bridge links, exhibits, reports).
+    Read-only aggregation, deterministically ordered; feeds the chain-of-custody narrative."""
+    from .services.activity import case_activity
+
+    return {"activity": case_activity(conn)}
+
+
+@app.get("/api/source_query/{source_query_id}")
+def api_source_query(source_query_id: str, conn=Depends(get_case_conn)) -> dict:
+    """The provenance drill-through behind every displayed fact/claim (FN-01, Invariant #3): the exact
+    query that produced it — connector, capability, endpoint, params/bounds, retrieval time, and the
+    raw-response hash. Read-only; 404 if the id is unknown in this case."""
+    from .services.provenance_display import source_query as get_source_query
+
+    sq = get_source_query(conn, source_query_id)
+    if sq is None:
+        raise HTTPException(status_code=404, detail="source_query not found")
+    return sq
 
 
 @app.post("/api/address/{address_id}/label")
@@ -865,8 +968,15 @@ def api_traces(conn=Depends(get_case_conn)) -> dict:
     custom = current_labels(conn, "trace")
     out = []
     for t in conn.execute("SELECT id, name, description FROM trace ORDER BY created_at, id").fetchall():
-        btc = conn.execute("SELECT COUNT(*) FROM trace_btc_link WHERE trace_id=?", (t["id"],)).fetchone()[0]
-        ev = conn.execute("SELECT COUNT(*) FROM trace_transfer WHERE trace_id=?", (t["id"],)).fetchone()[0]
+        # FN-04: counts reflect the EFFECTIVE trace — retracted edges/links are excluded (their rows persist).
+        btc = conn.execute(
+            "SELECT COUNT(*) FROM trace_btc_link l WHERE l.trace_id=? "
+            "AND NOT EXISTS (SELECT 1 FROM trace_btc_link_retraction r WHERE r.trace_btc_link_id=l.id)",
+            (t["id"],)).fetchone()[0]
+        ev = conn.execute(
+            "SELECT COUNT(*) FROM trace_transfer tt WHERE tt.trace_id=? "
+            "AND NOT EXISTS (SELECT 1 FROM trace_transfer_retraction r WHERE r.trace_transfer_id=tt.id)",
+            (t["id"],)).fetchone()[0]
         out.append({"id": t["id"], "name": custom.get(t["id"]) or t["name"],
                     "original_name": t["name"], "description": t["description"],
                     "btc_link_count": btc, "transfer_count": ev, "custom_label": t["id"] in custom})
@@ -901,6 +1011,19 @@ class TraceLinkBody(BaseModel):
     dest_output_id: str
     confidence: float | None = None
     ordering: int | None = None
+    note: str | None = None
+
+
+class RetractBody(BaseModel):
+    reason: str
+
+
+class BridgeLinkBody(BaseModel):
+    src_subject_type: Literal["transfer", "tx_output"]
+    src_subject_id: str
+    dst_subject_type: Literal["transfer", "tx_output"]
+    dst_subject_id: str
+    confidence: float | None = None
     note: str | None = None
 
 
@@ -967,6 +1090,102 @@ def api_trace_add_link(trace_id: str, body: TraceLinkBody, conn=Depends(get_case
     return {"ok": True, "trace_btc_link_id": link_id}
 
 
+@app.get("/api/transaction/{tx_id}/btc_link_candidates")
+def api_btc_link_candidates(tx_id: str, conn=Depends(get_case_conn)) -> dict:
+    """UX-06: the legal endpoints for a manual within-tx BTC link on this transaction — `sources` are the
+    prev-outputs the tx's inputs actually spend (in-DB), `dests` are the tx's own outputs. Picking one of
+    each keeps a manual link WITHIN the transaction (Invariant #5 — never a cross-tx edge); `add_manual_link`
+    re-validates on write, so this only powers the UI pickers. Empty lists for a non-BTC / unknown tx."""
+    def _candidate(r) -> dict:
+        addr = r["addr"] or "?"
+        return {"id": r["id"], "output_index": r["output_index"], "amount": r["amount"], "address": addr,
+                "label": f"out #{r['output_index']} · {r['amount']} sat · {addr}"}
+
+    sources = conn.execute(
+        "SELECT o.id, o.output_index, o.amount, a.address_display AS addr "
+        "FROM tx_input i JOIN tx_output o ON o.id=i.prev_output_id "
+        "LEFT JOIN address a ON a.id=o.address_id "
+        "WHERE i.transaction_id=? AND i.prev_output_id IS NOT NULL ORDER BY i.input_index", (tx_id,)).fetchall()
+    dests = conn.execute(
+        "SELECT o.id, o.output_index, o.amount, a.address_display AS addr "
+        "FROM tx_output o LEFT JOIN address a ON a.id=o.address_id "
+        "WHERE o.transaction_id=? ORDER BY o.output_index", (tx_id,)).fetchall()
+    return {"sources": [_candidate(r) for r in sources], "dests": [_candidate(r) for r in dests]}
+
+
+@app.get("/api/trace/{trace_id}/next_hops")
+def api_trace_next_hops(trace_id: str, conn=Depends(get_case_conn)) -> dict:
+    """FN-16 (guided expansion): PROPOSE candidate next hops from the trace's frontier — outgoing facts
+    ALREADY in the case that leave a terminal node. Strictly read-only: the investigator picks which to add
+    (EVM via /transfer, BTC via a within-tx /link); the tool never auto-adds or attributes flow."""
+    from .services.tracing import trace_next_hops
+
+    _require_trace(conn, trace_id)
+    return trace_next_hops(conn, trace_id)
+
+
+@app.get("/api/trace/{trace_id}/bridge_links")
+def api_trace_bridge_links(trace_id: str, conn=Depends(get_case_conn)) -> dict:
+    """FN-17: the trace's cross-chain bridge links (labeled investigator claims, with each side's chain)."""
+    from .services.tracing import trace_bridge_links
+
+    _require_trace(conn, trace_id)
+    return {"bridge_links": trace_bridge_links(conn, trace_id)}
+
+
+@app.post("/api/trace/{trace_id}/bridge")
+def api_trace_add_bridge(trace_id: str, body: BridgeLinkBody, conn=Depends(get_case_conn)) -> dict:
+    """FN-17: assert a manual CROSS-CHAIN bridge link — value leaving via a movement on chain A corresponds
+    to value arriving via a movement on chain B. A `basis='investigator'` CLAIM, never a synthesized fact
+    (Invariant #5); both movements must exist and cross chains. Manual only (no automated detection, RJ-02)."""
+    from .services.tracing import add_bridge_link
+
+    _require_trace(conn, trace_id)
+    try:
+        link_id = add_bridge_link(conn, trace_id=trace_id,
+            src_subject_type=body.src_subject_type, src_subject_id=body.src_subject_id,
+            dst_subject_type=body.dst_subject_type, dst_subject_id=body.dst_subject_id,
+            confidence=body.confidence, note=(body.note or "").strip() or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "bridge_link_id": link_id}
+
+
+@app.post("/api/trace/{trace_id}/transfer/{trace_transfer_id}/retract")
+def api_retract_trace_transfer(trace_id: str, trace_transfer_id: str, body: RetractBody,
+                               conn=Depends(get_case_conn)) -> dict:
+    """FN-04: retract an EVM trace edge (append-only — the edge row + retraction persist; the edge drops
+    out of the effective trace, graph, and report). Idempotent. Re-adding the edge afterwards works."""
+    from .services.tracing import retract_trace_transfer
+
+    _require_trace(conn, trace_id)
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="a retraction needs a non-empty reason")
+    try:
+        retraction_id = retract_trace_transfer(conn, trace_transfer_id=trace_transfer_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, "retraction_id": retraction_id}
+
+
+@app.post("/api/trace/{trace_id}/link/{trace_btc_link_id}/retract")
+def api_retract_trace_btc_link(trace_id: str, trace_btc_link_id: str, body: RetractBody,
+                               conn=Depends(get_case_conn)) -> dict:
+    """FN-04: retract a Bitcoin trace link (mirrors the EVM edge retraction — append-only, idempotent)."""
+    from .services.tracing import retract_trace_btc_link
+
+    _require_trace(conn, trace_id)
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="a retraction needs a non-empty reason")
+    try:
+        retraction_id = retract_trace_btc_link(conn, trace_btc_link_id=trace_btc_link_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, "retraction_id": retraction_id}
+
+
 @app.post("/api/trace/{trace_id}/label")
 def api_set_trace_label(trace_id: str, body: LabelBody, conn=Depends(get_case_conn)) -> dict:
     """Name/relabel a trace/path (feature 5). Persisted as an investigator label; the report + graph use
@@ -999,6 +1218,7 @@ def api_expand(req: ExpandRequest, conn=Depends(get_case_conn),
     from .connectors.etherscan import CHAIN_TO_CHAINID
     from .secrets import get_secret
     from .services import jobs
+    from .services.refetch_diff import capture_snapshot, compute_diff
     from .services.settings_store import is_offline
 
     # Offline-first (P5): block ingest up-front, connector-independent, so the message is always clear
@@ -1014,6 +1234,8 @@ def api_expand(req: ExpandRequest, conn=Depends(get_case_conn),
     job = jobs.start("ingest")
     job.phase = "fetching"
     existing = {r[0] for r in conn.execute("SELECT id FROM source_query").fetchall()}
+    # P23/FN-13: snapshot the fact-state BEFORE the re-fetch so we can report what it changed (read-only).
+    before_snap = capture_snapshot(conn)
     try:
         orch.get_transactions(conn, req.chain, req.address, req.bounds or {})
     except jobs.JobCancelled:
@@ -1038,7 +1260,14 @@ def api_expand(req: ExpandRequest, conn=Depends(get_case_conn),
                   for (sid, status) in conn.execute("SELECT id, status FROM source_query").fetchall()
                   if sid not in existing)
     job.finish({"partial": partial})
-    return {"graph": build_graph(conn), "partial": partial}
+    out = {"graph": build_graph(conn), "partial": partial}
+    # P23/FN-13: what this re-fetch changed — "+N transfers, K provisional→final, C corrected" (Inv #6/#7).
+    # Best-effort + read-only: a diff failure must never break the re-fetch itself.
+    try:
+        out["diff"] = compute_diff(conn, before_snap)
+    except Exception:  # noqa: BLE001 — surfacing the diff is non-critical; the facts are already persisted
+        pass
+    return out
 
 
 # How many movements one valuation pass attempts — bounds a runaway pass on a huge case (the circuit-
@@ -1064,11 +1293,24 @@ def _start_valuation_job(case_path: str):
         try:
             conn = get_connection(case_path, create_parents=False)
             connector = DeFiLlamaConnector(settings=get_settings())
+            # FN-05 — the shared price cache is a PURE optimization; opening it must NEVER block valuation.
+            cache_conn = None
             try:
-                res = value_movements(conn, connector, limit=VALUATION_PASS_CAP, job=job)
+                from .app_paths import user_data_dir
+                from .db.shared_cache import get_cache_connection, migrate_cache
+                cache_path = user_data_dir() / "library_cache.db"
+                migrate_cache(cache_path)
+                cache_conn = get_cache_connection(cache_path)
+            except Exception:
+                cache_conn = None
+            try:
+                res = value_movements(conn, connector, limit=VALUATION_PASS_CAP, job=job,
+                                      cache_conn=cache_conn)
                 job.finish(res)
             finally:
                 connector.close()
+                if cache_conn is not None:
+                    cache_conn.close()
                 conn.close()
         except jobs.JobCancelled:
             job.mark_canceled()

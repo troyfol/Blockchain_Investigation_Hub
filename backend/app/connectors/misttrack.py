@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from ..db import repository as repo
 from ..db.repository import utc_now_iso
-from ..models import Address, Attribution, RiskAssessment, SourceQuery
+from ..models import Address, Attribution, RiskAssessment, RiskDetail, SourceQuery
 from ..normalization.canonical import canonical_address
 from ..normalization.misttrack_adapter import CHAIN_TO_COIN, adapt_labels, adapt_risk, coin_for
 from ..provenance.atomic import write_with_provenance
@@ -95,10 +95,17 @@ class MisTrackConnector(BaseHttpConnector):
             addr_id = repo.upsert_address(c, Address(chain=chain, address_display=address), sqid)
             if risk is None or risk.score is None:
                 return {"risks": 0}  # no usable score -> the check is still recorded (provenance), no row
-            repo.upsert_risk_assessment(c, RiskAssessment(
+            ra_id = repo.upsert_risk_assessment(c, RiskAssessment(
                 address_id=addr_id, score=risk.score, score_scale=risk.score_scale,
                 category=risk.category, rationale=risk.rationale, source=self.source, retrieved_at=now), sqid)
-            return {"risks": 1, "score": risk.score, "category": risk.category}
+            # FN-15: each nested risk_detail[] sub-signal → a first-class RAW row (Invariant #4). Scaffold —
+            # gated on the key for LIVE use; field names TODO: confirm (misttrack_adapter).
+            for d in risk.details:
+                repo.insert_risk_detail(c, RiskDetail(
+                    risk_assessment_id=ra_id, signal=d.signal, score=d.score,
+                    score_scale=d.score_scale), sqid)
+            return {"risks": 1, "score": risk.score, "category": risk.category,
+                    "detail_signals": len(risk.details)}
 
         _, res = write_with_provenance(conn, sq, write, raw_response=payload)
         return res

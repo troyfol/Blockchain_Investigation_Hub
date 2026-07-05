@@ -7,6 +7,7 @@ from .claims import (
     EntityMembership,
     EntityMembershipRetraction,
     RiskAssessment,
+    RiskDetail,
     Valuation,
 )
 from .investigator import (
@@ -17,8 +18,11 @@ from .investigator import (
     Report,
     Tag,
     Trace,
+    TraceBridgeLink,
     TraceBtcLink,
+    TraceBtcLinkRetraction,
     TraceTransfer,
+    TraceTransferRetraction,
 )
 from .onchain import Address, Asset, Erc20Approval, Transaction, Transfer, TxInput, TxOutput
 from .provenance import Exhibit, SourceQuery
@@ -38,6 +42,7 @@ __all__ = [
     # sourced claims + entities (Family B)
     "Attribution",
     "RiskAssessment",
+    "RiskDetail",
     "Valuation",
     "BalanceSnapshot",
     "Entity",
@@ -47,6 +52,9 @@ __all__ = [
     "Trace",
     "TraceTransfer",
     "TraceBtcLink",
+    "TraceBridgeLink",
+    "TraceTransferRetraction",
+    "TraceBtcLinkRetraction",
     "Finding",
     "FindingRef",
     "Annotation",

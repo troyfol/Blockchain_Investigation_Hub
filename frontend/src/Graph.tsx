@@ -4,6 +4,7 @@ import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import fcose from "cytoscape-fcose";
 import { computeOrdering, type OrderState } from "./ordering";
 import { buildCytoscapeStyle, t } from "./theme/theme";
+import Legend from "./Legend";
 
 // Register the fast force-directed layout once (idempotent: cytoscape.use throws on a re-register, so
 // guard it for HMR / repeated module eval in dev).
@@ -45,7 +46,9 @@ export type GraphNode = {
   threshold_usd?: number;  // user_dust bucket threshold ("below $X")
   // Summary intelligence flags from the read-model (services/graph.py) that drive on-canvas styling.
   risk_level?: "sanctioned" | "elevated";
+  risk_sources?: string[];        // UX-03 — distinct source(s) asserting the risk (hover cue; never merged)
   has_attribution?: boolean;
+  attribution_sources?: string[]; // UX-03 — distinct source(s) behind the attribution
   entity_label?: string;
   coinjoin?: boolean;
   seed?: boolean;          // the address the investigation started from (★ anchor)
@@ -70,6 +73,11 @@ export type GraphEdge = {
   target: string;
   kind: "transfer" | "tx_input" | "tx_output" | "trace" | "aggregate" | "user_dust" | "unverified" | "poison";
   paradigm: string;
+  // UX-03 provenance-on-hover: the connector that acquired this fact + its source_query id (drill-through
+  // to P1's /api/source_query). A parallel rollup carries the DISTINCT set of sources instead (Inv #4).
+  source_name?: string;
+  source_names?: string[];
+  source_query_id?: string;
   is_token?: boolean;          // P8.7 — a non-native (ERC-20) movement
   token_unverified?: boolean;  // P8.7 #2 — unpriced + not allowlisted (de-emphasised; not a malice claim)
   poison_suspect?: boolean;    // P8.7 #3 — a 0-value look-alike transfer (heuristic)
@@ -258,6 +266,10 @@ export default function Graph({ data, onSelect, onSelectEdge, onEditNode, onExpa
         if (d.seed) lines.push("★ seed / anchor");
         if (d.risk_level === "sanctioned") lines.push("⛔ sanctioned");
         else if (d.risk_level) lines.push(`⚠ ${d.risk_level} risk`);
+        // UX-03 — name the source(s) behind the risk/attribution so provenance reads off the canvas
+        // (0 interactions); the full record is one click away in the SidePanel (FN-01).
+        if (d.risk_sources?.length) lines.push(`risk source: ${d.risk_sources.join(", ")}`);
+        if (d.attribution_sources?.length) lines.push(`attribution: ${d.attribution_sources.join(", ")}`);
         if (d.coinjoin) lines.push("⚠ possible-coinjoin");
         if (d.val) {
           const sym = d.val.native_symbol ?? "";
@@ -279,14 +291,30 @@ export default function Graph({ data, onSelect, onSelectEdge, onEditNode, onExpa
       tip.style.display = "block";
     };
     const hideTip = () => { if (tip) tip.style.display = "none"; };
-    // Trace edges name the path on hover ("near the path") — the trace's display label + its convention.
+    // Edge hover: trace edges name the path + its convention; fact edges (transfer / tx_input / tx_output)
+    // name the movement + the SOURCE that acquired it (UX-03), so provenance reads off the canvas with no
+    // click. A parallel rollup lists every distinct source side-by-side (never merged — Invariant #4).
+    const edgeKindLabel = (k: string) =>
+      k === "transfer" ? "transfer" : k === "tx_input" ? "tx input" : k === "tx_output" ? "tx output" : k;
     const showEdgeTip = (evt: any) => {
       if (!tip) return;
       const d = evt.target.data() as GraphEdge;
-      if (d.kind !== "trace") return;
       const lines: string[] = [];
-      if (d.trace_name) lines.push(d.trace_name);
-      lines.push(d.trace === "fifo" ? "FIFO trace (convention)" : "investigator trace");
+      if (d.kind === "trace") {
+        if (d.trace_name) lines.push(d.trace_name);
+        lines.push(d.trace === "fifo" ? "FIFO trace (convention)" : "investigator trace");
+      } else {
+        let head = edgeKindLabel(d.kind);
+        const amt = d.value_usd_label || d.value_label;
+        if (amt) head += ` ${amt}`;
+        lines.push(head);
+        if (d.parallel_aggregate && d.count) lines.push(`${d.count.toLocaleString()} movements (rollup)`);
+        const srcs = d.source_names?.length ? d.source_names : d.source_name ? [d.source_name] : [];
+        if (srcs.length) lines.push(`source: ${srcs.join(", ")}`);
+        if (d.value_contested) lines.push("⚠ multiple sources priced this");
+        else if (d.no_price) lines.push("no USD price");
+      }
+      if (lines.length === 0) return;
       tip.textContent = lines.join("\n");
       const p = evt.renderedPosition || { x: 0, y: 0 };
       tip.style.left = `${p.x + 14}px`;
@@ -362,6 +390,8 @@ export default function Graph({ data, onSelect, onSelectEdge, onEditNode, onExpa
         border: `1px solid ${t("ui.border")}`, borderRadius: 4, padding: "5px 8px",
         fontSize: 11, lineHeight: 1.35,
       }} />
+      {/* P34/UX-01 — context-aware legend as a collapsible on-canvas overlay (moved off the header row). */}
+      <Legend data={data} />
     </div>
   );
 }

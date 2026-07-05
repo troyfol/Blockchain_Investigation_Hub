@@ -46,18 +46,19 @@ _TEMPLATES = resource_path("backend/app/report_templates")
 
 def _collect_traces(conn) -> list[dict]:
     from .investigator import current_labels
-    from .tracing import trace_btc_links
+    from .tracing import trace_bridge_links, trace_btc_links, trace_transfers
     # The display name = the trace's name, overridden by the investigator's latest custom label
     # (feature 5; migration 0008) — so a renamed path reads the same in the report as on the graph.
+    # FN-04: `trace_btc_links`/`trace_transfers` both exclude retracted edges, so a retracted edge/link
+    # never appears in the report (the row persists in-DB; it is just no longer part of the trace).
     custom = current_labels(conn, "trace")
     traces = []
     for t in conn.execute("SELECT id, name, description FROM trace ORDER BY created_at, id").fetchall():
         links = trace_btc_links(conn, t["id"])
-        transfers = conn.execute(
-            "SELECT transfer_id, ordering, note FROM trace_transfer WHERE trace_id=? ORDER BY ordering, id",
-            (t["id"],)).fetchall()
+        transfers = trace_transfers(conn, t["id"])
+        bridges = trace_bridge_links(conn, t["id"])  # FN-17: cross-chain investigator claims
         traces.append({"name": custom.get(t["id"]) or t["name"], "description": t["description"],
-                       "btc_links": links, "transfers": [dict(r) for r in transfers]})
+                       "btc_links": links, "transfers": transfers, "bridge_links": bridges})
     return traces
 
 
@@ -65,6 +66,13 @@ def _collect_findings(conn) -> list[dict]:
     # Enriched with a readable label per ref (shared with the live composer's /api/findings).
     from .investigator import list_findings
     return list_findings(conn)
+
+
+def _collect_exhibits(conn) -> list[dict]:
+    """Every exhibit with its STABLE number (FN-10) — the List-of-Exhibits source + the number a finding
+    cites. Numbering is deterministic (``exhibits.numbered_exhibits`` sorts by captured_at, id)."""
+    from .exhibits import numbered_exhibits
+    return numbered_exhibits(conn)
 
 
 def _collect_notes(conn) -> list[dict]:
@@ -127,9 +135,136 @@ def _valuation_honesty(conn) -> dict:
             "in_progress": in_progress}
 
 
+def _facts_produced_by_query(conn) -> dict[str, int]:
+    """Count, per ``source_query``, the fact/claim rows it produced — summed across every
+    provenance-bearing table (any base table carrying a ``source_query_id`` column, discovered from the
+    schema so tables added by later migrations are counted automatically). This is the provenance spine
+    (Invariant #3) read straight back out of the DB; it never merges or interprets, only counts."""
+    counts: dict[str, int] = {}
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    for t in tables:  # table names come from the schema, not user input — safe to interpolate.
+        cols = [c["name"] for c in conn.execute(f'PRAGMA table_info("{t}")')]
+        if "source_query_id" not in cols:
+            continue
+        for row in conn.execute(
+                f'SELECT source_query_id AS sqid, COUNT(*) AS n FROM "{t}" '
+                "WHERE source_query_id IS NOT NULL GROUP BY source_query_id"):
+            counts[row["sqid"]] = counts.get(row["sqid"], 0) + row["n"]
+    return counts
+
+
+def _collect_custody(conn) -> list[dict]:
+    """The chain-of-custody appendix (FN-02): every ``source_query`` in the case, in a DETERMINISTIC order
+    (``requested_at``, ``id``), each serialized via the FN-01 provenance serializer (connector, capability,
+    endpoint, params/bounds, retrieval time, FULL raw-response hash) plus ``produced`` = the count of
+    fact/claim rows that query wrote. A query with no surviving rows is still listed — nothing is hidden.
+    Read-only surfacing of the provenance spine (Invariant #3)."""
+    from . import provenance_display
+
+    produced = _facts_produced_by_query(conn)
+    out = []
+    for r in conn.execute("SELECT id FROM source_query ORDER BY requested_at, id").fetchall():
+        rec = provenance_display.source_query(conn, r["id"])
+        if rec is None:  # unreachable (the id came from the table) — defensive only.
+            continue
+        rec["produced"] = produced.get(r["id"], 0)
+        out.append(rec)
+    return out
+
+
+def _collect_methodology(conn) -> dict:
+    """Facts backing the Methodology section (FN-08): the per-chain finality thresholds ACTUALLY USED in
+    this case. The chains come from ``transaction_`` — every EVM ``transfer`` and BTC ``tx_output`` hangs
+    off a ``transaction_`` row, so this is exactly the set of chains whose finality was evaluated (Invariant
+    #6) — each paired with the threshold from the LIVE app config (``config.py``), never a hardcoded literal.
+    So the report states the exact policy that flipped its own facts provisional→final, and a
+    ``BIH_FINALITY_THRESHOLDS`` override is reflected verbatim. Deterministic (chains sorted) so the report
+    ``content_hash`` stays stable."""
+    from ..config import get_settings
+
+    settings = get_settings()
+    chains = [r["chain"] for r in conn.execute(
+        "SELECT DISTINCT chain FROM transaction_ ORDER BY chain").fetchall()]
+    return {"finality_thresholds": [
+        {"chain": c, "threshold": settings.finality_threshold(c)} for c in chains]}
+
+
+# The glossary catalog (FN-08/P17): (term, definition-HTML, trigger-SQL). A term is listed ONLY when its
+# trigger finds the kind of evidence it describes actually present in THIS case — so the glossary defines
+# the case's real vocabulary, never boilerplate. Definitions are fixed, trusted HTML (no user data, so no
+# escaping); the term goes in a <dt>, the definition in a <dd>. Order is fixed (schema/model terms first)
+# → deterministic. Each trigger is a cheap EXISTS-style probe; a term whose table is empty is skipped.
+_GLOSSARY_CATALOG: list[tuple[str, str, str]] = [
+    ("UTXO (unspent transaction output)",
+     "Bitcoin&rsquo;s ledger model: value exists as transaction <i>outputs</i> that later transactions "
+     "consume as <i>inputs</i>. There is no direct sender&rarr;receiver &ldquo;transfer&rdquo; recorded "
+     "on-chain &mdash; only inputs and outputs.",
+     "SELECT 1 FROM transaction_ WHERE chain='bitcoin' LIMIT 1"),
+    ("FIFO (first-in-first-out)",
+     "A convention for ordering commingled funds when tracing (the first coins in are treated as the "
+     "first out), applied as a labeled <b>claim</b>, never as ground-truth flow. Legal basis: "
+     "<i>Clayton&rsquo;s Case</i>.",
+     "SELECT 1 FROM trace_btc_link WHERE basis='fifo' LIMIT 1"),
+    ("Provisional vs. final",
+     "A transaction&rsquo;s facts are <b>provisional</b> (still correctable) until it reaches the "
+     "per-chain confirmation threshold, after which they are treated as <b>final</b> and immutable. "
+     "Provisional facts are drawn dashed/faded in the graph.",
+     "SELECT 1 FROM transaction_ WHERE finality_status='provisional' LIMIT 1"),
+    ("Value at time of movement",
+     "Each value movement is priced at (or near) the timestamp of its transaction&rsquo;s block using a "
+     "historical price for that moment &mdash; not a current price &mdash; so a figure reflects the value "
+     "when the funds actually moved.",
+     "SELECT 1 FROM valuation LIMIT 1"),
+    ("Attribution vs. fact",
+     "An <b>attribution</b> (e.g. &ldquo;this address belongs to Exchange&nbsp;X&rdquo;) is a sourced "
+     "<i>claim</i>, distinct from an on-chain <i>fact</i> (a recorded transaction). Attributions carry "
+     "their source and are never merged into a single verdict.",
+     "SELECT 1 FROM attribution LIMIT 1"),
+    ("CoinJoin",
+     "A Bitcoin transaction that combines many participants&rsquo; inputs and outputs to break the "
+     "common-input (co-spend) heuristic. Addresses in such a transaction are flagged so clustering is "
+     "not over-trusted.",
+     "SELECT 1 FROM entity_membership WHERE flags LIKE '%possible-coinjoin%' LIMIT 1"),
+    ("Sanctioned (OFAC SDN)",
+     "An address a sanctions source (e.g. the OFAC Specially Designated Nationals list) has designated. "
+     "A sanctions hit is a sourced <b>claim</b>, not a fact about the chain.",
+     "SELECT 1 FROM risk_assessment WHERE category='sanctioned' LIMIT 1"),
+    ("Co-spend cluster",
+     "A set of Bitcoin addresses inferred to share a controller because they were spent together as "
+     "inputs to one transaction (the common-input heuristic). An inference &mdash; weakened when a "
+     "transaction is a CoinJoin.",
+     "SELECT 1 FROM entity_membership WHERE method='co-spend' LIMIT 1"),
+    ("Cross-chain bridge",
+     "A protocol that moves value between blockchains. A bridge crossing is recorded only as a labeled "
+     "investigator <b>claim</b> inside a trace &mdash; never synthesized as an on-chain transfer.",
+     "SELECT 1 FROM trace_bridge_link LIMIT 1"),
+]
+
+
+def _collect_glossary(conn) -> list[dict]:
+    """The case-scoped glossary (FN-11): every catalog term whose trigger finds matching evidence in this
+    case, in fixed catalog order (deterministic). Read-only; defines the case's vocabulary honestly (only
+    terms actually used) so the report never pads with definitions it doesn't rely on."""
+    out = []
+    for term, definition, trigger in _GLOSSARY_CATALOG:
+        if conn.execute(trigger).fetchone():
+            out.append({"term": term, "definition": definition})
+    return out
+
+
 def build_report_context(conn, *, title: str, scope_spec: dict, generated_at: str,
                          graph: dict | None = None) -> dict:
     case = conn.execute("SELECT id, title, description FROM case_meta LIMIT 1").fetchone()
+    # FN-10: assign every exhibit its stable number, then cross-reference that number from any finding that
+    # refers to it (the report cites "Exhibit N", never the raw exhibit id).
+    exhibits = _collect_exhibits(conn)
+    exhibit_labels = {e["id"]: e["label"] for e in exhibits}
+    findings = _collect_findings(conn)
+    for f in findings:
+        for r in f["refs"]:
+            if r["ref_type"] == "exhibit":
+                r["label"] = exhibit_labels.get(r["ref_id"], r["label"])
     return {
         "title": title,
         "case": dict(case) if case else {"title": "(uninitialized case)"},
@@ -138,12 +273,16 @@ def build_report_context(conn, *, title: str, scope_spec: dict, generated_at: st
         # P8.7.1 #2 — the report renders the investigator's CURRENT bounded VIEW when one is supplied
         # (focus/hops/dust/denominations/spam-collapse/poison-fold/value_basis), else the full case graph.
         "graph": graph if graph is not None else build_graph(conn),
+        "methodology": _collect_methodology(conn),
         "traces": _collect_traces(conn),
-        "findings": _collect_findings(conn),
+        "findings": findings,
+        "exhibits": exhibits,
         "notes": _collect_notes(conn),
         "risk": _collect_risk(conn),
         "entities": _collect_entities(conn),
         "valuation": _valuation_honesty(conn),
+        "custody": _collect_custody(conn),
+        "glossary": _collect_glossary(conn),
     }
 
 
@@ -172,6 +311,61 @@ def _short(s, head: int = 10, tail: int = 8) -> str:
     return s if len(s) <= head + tail + 1 else f"{s[:head]}…{s[-tail:]}"
 
 
+def _methodology_section(m: dict) -> str:
+    """The Methodology section (FN-08): a court-ready, self-contained statement of HOW to read this report
+    — the Bitcoin input/output tracing convention + its legal basis, the value-at-time valuation method,
+    the finality thresholds actually applied, the side-by-side (never-averaged) claim policy, the scope
+    bounds, and the honest limits. Everything here is fixed prose EXCEPT the finality table, whose values
+    are the case's real config thresholds (``_collect_methodology``) — so the section documents existing
+    behavior honestly and renders deterministically."""
+    thr = m["finality_thresholds"]
+    if thr:
+        rows = "".join(
+            f"<tr><td>{_esc(t['chain'])}</td>"
+            f"<td class='count'>{_esc(t['threshold'])}+ confirmations</td></tr>" for t in thr)
+        finality_table = ("<table><tr><th>chain</th><th>treated as final at</th></tr>"
+                          f"{rows}</table>")
+    else:
+        finality_table = ('<p class="empty">No on-chain transactions are recorded in this case, so no '
+                          "finality threshold was applied.</p>")
+    return (
+        "<h3>How movement is traced</h3>"
+        "<p>On Bitcoin the ledger records transaction inputs and outputs, not a direct "
+        "sender&rarr;receiver transfer, and a specific input is never inherently linked to a specific "
+        "output. Where a trace connects one to another it applies a <b>First-In-First-Out (FIFO)</b> "
+        "ordering as a labeled <b>convention</b> (basis <span class='pill fifo'>fifo</span>), or records "
+        "an explicit investigator assertion (basis <span class='pill investigator'>investigator</span>). "
+        "Neither is presented as ground-truth flow of funds. FIFO applied to commingled funds follows the "
+        "rule in <i>Clayton&rsquo;s Case</i> (<i>Devaynes v Noble</i> (1816)), applied to mixed "
+        "cryptoassets in <i>D&rsquo;Aloia v Persons Unknown</i> [2022] EWHC 1723 (Ch). On EVM chains a "
+        "transfer <i>is</i> a recorded on-chain fact (A&rarr;B) and is shown as such.</p>"
+        "<h3>Valuation (value at the time of movement)</h3>"
+        "<p>Each value movement is priced at, or near, the timestamp of its transaction&rsquo;s block, "
+        "using a source&rsquo;s historical price for that asset. Where more than one source prices the "
+        "same movement, every source&rsquo;s value is kept side-by-side &mdash; never averaged or blended "
+        "into one number. A movement with no available price is shown as missing, never as a fabricated "
+        "zero.</p>"
+        "<h3>Finality before immutability</h3>"
+        "<p>A transaction&rsquo;s facts are treated as immutable only once the transaction is <b>final</b> "
+        "(confirmations at or above the per-chain threshold); provisional (tip) facts remain correctable "
+        "and are drawn dashed/faded in the graph. The thresholds below are the policy actually applied in "
+        "this case, read from this installation&rsquo;s active configuration:</p>"
+        f"{finality_table}"
+        "<h3>Sources are kept side-by-side</h3>"
+        "<p>When sources disagree &mdash; on a risk or sanctions score, an entity attribution, or a "
+        "valuation &mdash; every source&rsquo;s claim is retained separately with its own provenance. This "
+        "tool never merges, averages, or synthesizes a single verdict from conflicting sources.</p>"
+        "<h3>Scope</h3>"
+        "<p>This report reflects only the data acquired under the applied bounds recorded in "
+        "&ldquo;Scope &amp; applied bounds&rdquo; below. It does not imply the complete transaction "
+        "history of any address or entity.</p>"
+        "<h3>Limits &amp; honesty</h3>"
+        "<p>Timestamps are recorded from the local machine clock and are <b>not</b> independently notarized "
+        "or timestamped by a trusted third party. The chain-of-custody appendix lists the full SHA-256 of "
+        "every raw response, so any recipient can independently verify each exhibit against the source "
+        "data. Nothing here should be read as legal advice or as a conclusive attribution of identity.</p>")
+
+
 def _trace_section(traces: list[dict]) -> str:
     if not traces:
         return '<p class="empty">No traces in this case.</p>'
@@ -192,7 +386,18 @@ def _trace_section(traces: list[dict]) -> str:
                 f"<th>note</th></tr>{rows}</table>")
         if t["transfers"]:
             parts.append(f'<p class="sub">{len(t["transfers"])} EVM transfer edge(s) referenced.</p>')
-        if not t["btc_links"] and not t["transfers"]:
+        if t.get("bridge_links"):
+            # FN-17: cross-chain bridge crossings — labeled investigator claims, never ledger facts.
+            rows = "".join(
+                f"<tr><td class='mono'>{_esc(b['src_chain'])}: {_esc(_short(b['src_subject_id']))}</td>"
+                f"<td class='mono'>{_esc(b['dst_chain'])}: {_esc(_short(b['dst_subject_id']))}</td>"
+                f"<td><span class='pill {_esc(b['basis'])}'>{_esc(b['basis'])}</span></td>"
+                f"<td>{_esc(b['note'])}</td></tr>"
+                for b in t["bridge_links"])
+            parts.append(
+                "<table><tr><th>from (chain A)</th><th>to (chain B)</th><th>basis</th>"
+                f"<th>note</th></tr>{rows}</table>")
+        if not t["btc_links"] and not t["transfers"] and not t.get("bridge_links"):
             parts.append('<p class="empty">empty trace</p>')
     return "".join(parts)
 
@@ -211,6 +416,25 @@ def _findings_section(findings: list[dict]) -> str:
                 f"<td>{_esc(r['note'])}</td></tr>" for r in f["refs"])
             parts.append(f"<table><tr><th>refers to</th><th>target</th><th>note</th></tr>{rows}</table>")
     return "".join(parts)
+
+
+def _exhibits_section(exhibits: list[dict]) -> str:
+    """The List of Exhibits (FN-10): each hashed artifact (screenshot/file/export) with its STABLE number,
+    type, source, capture time, description, and FULL content hash for tamper-checking. Numbers are assigned
+    by a deterministic sort (report immutability) and are what findings cite ("Exhibit N")."""
+    if not exhibits:
+        return ('<p class="empty">No exhibits attached — this case cites no screenshot/file/export '
+                "artifacts.</p>")
+    lead = (f"<p>{len(exhibits)} exhibit(s), numbered by capture time. Each is a hashed artifact; the full "
+            "SHA-256 lets any recipient verify the file has not changed. Findings cite these numbers.</p>")
+    rows = "".join(
+        f"<tr><td><b>{_esc(e['label'])}</b></td><td>{_esc(e['exhibit_type'])}</td>"
+        f"<td>{_esc(e['source'])}</td><td>{_esc(e['captured_at'])}</td>"
+        f"<td>{_esc(e['description'])}</td><td class='hash'>{_esc(e['content_hash'])}</td></tr>"
+        for e in exhibits)
+    table = ("<table class='exhibits'><tr><th>exhibit</th><th>type</th><th>source</th><th>captured</th>"
+             f"<th>description</th><th>content hash (SHA-256)</th></tr>{rows}</table>")
+    return lead + table
 
 
 def _notes_section(notes: list[dict]) -> str:
@@ -341,6 +565,216 @@ def _valuation_section(v: dict) -> str:
     return (f"<p>{v['valued']} of {v['movements']} value movement(s) are valued in USD.{miss}{multi}</p>{prog}")
 
 
+def _flatten_scope(scope, prefix: str = "") -> list[tuple[str, str]]:
+    """Flatten a ``scope_spec`` into DETERMINISTIC ``(key, value)`` rows for the scope table (P14): nested
+    dicts become dotted keys, lists join to a compact string, bools read yes/no, ``None`` shows an em dash.
+    Keys are sorted at every level so the rendered table (and thus the report ``content_hash``) is stable."""
+    rows: list[tuple[str, str]] = []
+    if isinstance(scope, dict):
+        for k in sorted(scope.keys(), key=str):
+            rows.extend(_flatten_scope(scope[k], f"{prefix}{k}."))
+        return rows
+    key = prefix[:-1] if prefix else "(value)"
+    if isinstance(scope, bool):
+        val = "yes" if scope else "no"
+    elif scope is None:
+        val = "—"
+    elif isinstance(scope, list):
+        val = ", ".join(json.dumps(x, sort_keys=True) if isinstance(x, (dict, list)) else str(x)
+                        for x in scope) or "—"
+    else:
+        val = str(scope)
+    rows.append((key, val))
+    return rows
+
+
+def _scope_section(scope: dict) -> str:
+    """Render the applied bounds as a court-legible key/value TABLE (P14) instead of a raw ``<pre>`` JSON
+    dump. Deterministic (``_flatten_scope`` sorts keys) so the report ``content_hash`` stays stable."""
+    rows = _flatten_scope(scope)
+    if not rows:
+        return '<p class="empty">No scope bounds recorded (full case, as ingested).</p>'
+    trs = "".join(f"<tr><td class='mono'>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in rows)
+    return f"<table class='scope'><tr><th>bound</th><th>value</th></tr>{trs}</table>"
+
+
+def _custody_section(custody: list[dict]) -> str:
+    """Chain-of-custody appendix (FN-02): a deterministic table of every ``source_query`` behind the case —
+    connector / capability / endpoint, params/bounds, retrieval time, status, count of facts/claims
+    produced, and the FULL (untruncated) raw-response SHA-256 for tamper-checking. This is what makes every
+    exhibit traceable to the exact query that acquired it (Invariant #3) — the core of a defensible case."""
+    if not custody:
+        return ('<p class="empty">No source queries recorded — this case contains no acquired facts or '
+                "claims.</p>")
+    lead = (f"<p>{len(custody)} source quer{'y' if len(custody) == 1 else 'ies'} produced the facts and "
+            "claims in this case. Each row is the exact query behind one or more exhibits, with the full "
+            "SHA-256 of its raw response for tamper-checking. Ordered by acquisition time; a query with no "
+            "surviving rows is still listed (nothing is hidden).</p>")
+    rows = []
+    for q in custody:
+        params = q.get("params")
+        params_txt = (json.dumps(params, sort_keys=True) if isinstance(params, (dict, list))
+                      else ("" if params is None else str(params)))
+        h = q.get("raw_response_hash")
+        hash_cell = (f"<span class='hash'>{_esc(h)}</span>" if h
+                     else "<span class='muted'>&mdash; (no raw response captured)</span>")
+        rows.append(
+            f"<tr><td>{_esc(q['connector'])}</td><td>{_esc(q['capability'])}</td>"
+            f"<td>{_esc(q['endpoint'])}</td><td class='params'>{_esc(params_txt)}</td>"
+            f"<td>{_esc(q['requested_at'])}</td><td>{_esc(q['status'])}</td>"
+            f"<td class='count'>{_esc(q['produced'])}</td><td>{hash_cell}</td></tr>")
+    table = ("<table class='custody'><tr><th>connector</th><th>capability</th><th>endpoint</th>"
+             "<th>params / bounds</th><th>retrieved</th><th>status</th><th>facts/claims</th>"
+             f"<th>raw-response hash (SHA-256)</th></tr>{''.join(rows)}</table>")
+    return lead + table
+
+
+def _glossary_section(glossary: list[dict]) -> str:
+    """The case-scoped glossary appendix (FN-11): a definition list of only the terms this case uses. The
+    section is rendered only when non-empty (`_effective_sections` omits it otherwise), so this empty branch
+    is defensive. Definitions are trusted static HTML; the term is escaped."""
+    if not glossary:
+        return '<p class="empty">No specialized terms are used in this case.</p>'
+    lead = ("<p>Specialized terms used in this report, defined for the reader. Only terms this case "
+            "actually relies on are listed.</p>")
+    items = "".join(f"<dt>{_esc(g['term'])}</dt><dd>{g['definition']}</dd>" for g in glossary)
+    return lead + f'<dl class="glossary">{items}</dl>'
+
+
+# --------------------------------------------------------------------------- court-formal scaffolding (FN-12)
+
+# The report's content sections, in render order, as (anchor-slug, heading) pairs. This single list drives
+# BOTH the table of contents and the <section id=…> wrappers, so a TOC entry can never drift from its
+# heading (a test asserts the two sets are identical). Anchors live on the <section> wrapper, not the <h2>,
+# so the headings stay bare <h2>Title</h2> — pre-existing tests that split on a bare heading are unaffected.
+_REPORT_SECTIONS: list[tuple[str, str]] = [
+    ("methodology", "Methodology"),
+    ("graph", "Graph"),
+    ("risk-and-sanctions", "Risk & sanctions"),
+    ("traces", "Traces"),
+    ("findings", "Findings"),
+    ("investigator-notes", "Investigator notes"),
+    ("entities", "Entities"),
+    ("valuation-coverage", "Valuation coverage"),
+    ("scope-and-applied-bounds", "Scope & applied bounds"),
+    ("list-of-exhibits", "List of Exhibits"),
+    ("chain-of-custody", "Chain of custody"),
+]
+
+# The graph section's body (the Cytoscape canvas + the fixed legend). Static markup, kept as a constant so
+# the section loop can treat every section's body uniformly.
+_GRAPH_BODY = (
+    '<div id="cy"></div>\n'
+    '  <div class="legend">\n'
+    "    <span>&#9679; address</span><span>&#9646; bitcoin transaction (routing)</span>\n"
+    "    <span>&#9670; external (mint/burn/coinbase)</span><span>&#9654; transfer (filled arrow)</span>\n"
+    "    <span>&#8867; tx input (bar arrow)</span><span>&#8250; tx output (chevron)</span><span>fine dots = provisional (tip)</span>\n"
+    "    <span>&#9210; red halo = sanctioned/risk</span><span>teal ring = attributed entity</span>\n"
+    "    <span>&#9888; possible-coinjoin</span><span>long dash = FIFO trace &middot; long dash-dot = investigator (convention)</span>\n"
+    "    <span>&#9733; seed / anchor</span><span>edge label = value; width &prop; value</span>\n"
+    "  </div>")
+
+
+def _css_str(s) -> str:
+    """Escape a value for a CSS string literal (``content: "…"``). Case ids are UUIDs, but escape a
+    backslash/quote defensively so a value can never break out of the string into arbitrary CSS."""
+    return '"' + str("" if s is None else s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _footer_css(case_id) -> str:
+    """A running footer on EVERY printed page (FN-12): the case id (page-identification if pages are
+    physically separated) at bottom-left, ``Page N of M`` at bottom-right — via CSS ``@page`` margin boxes.
+
+    Injected as a SECOND ``@page`` rule: Blink merges margin boxes across ``@page`` rules with report.css's
+    ``@page { size; margin }`` (verified this phase on BOTH the default Edge/Chrome ``--print-to-pdf`` CLI
+    and the Playwright fallback — both render ``counter(page)``/``counter(pages)``). The dynamic case id is
+    emitted as a LITERAL (Blink does not support the GCPM ``string()``/``string-set`` feature), CSS-escaped.
+    ``--no-pdf-header-footer`` stays set on the CLI, so ONLY this footer prints — never the browser's own
+    default footer (which would also leak the ``file://`` path)."""
+    label = _css_str(f"Case {case_id}") if case_id else _css_str("Case (uninitialized)")
+    ff = '"Segoe UI", system-ui, -apple-system, Arial, sans-serif'
+    box = f"font-family: {ff}; font-size: 8px; color: var(--bih-report-footer-text);"
+    return ("\n@page {\n"
+            f"  @bottom-left {{ content: {label}; {box} }}\n"
+            f'  @bottom-right {{ content: "Page " counter(page) " of " counter(pages); {box} }}\n'
+            "}\n")
+
+
+def _cover_section(ctx: dict) -> str:
+    """The cover page (FN-12): report title, case identity, generated-at, a court-formal ``Prepared by``
+    signature line, and an integrity statement.
+
+    Watch item (documented): the report's OWN SHA-256 ``content_hash`` is deliberately NOT printed here — it
+    is taken over this very HTML, so embedding it would change the bytes it certifies (a document cannot
+    contain a verifiable hash of itself). The cover instead states how to recompute + check the hash against
+    the immutable report registry; the value lives in the ``report`` row + export manifest."""
+    case = ctx["case"]
+    case_id = case.get("id") or "(uninitialized)"
+    selection = (ctx.get("scope_spec") or {}).get("selection", "full-case")
+    return (
+        '<section class="cover">'
+        '<div class="cover-org">Blockchain Investigation Hub</div>'
+        f'<h1 class="cover-title">{_esc(ctx["title"])}</h1>'
+        '<div class="cover-kind">Provenance-first blockchain investigation report</div>'
+        '<table class="cover-meta">'
+        f'<tr><td class="k">Case</td><td class="v">{_esc(case.get("title"))}</td></tr>'
+        f'<tr><td class="k">Case ID</td><td class="v mono">{_esc(case_id)}</td></tr>'
+        f'<tr><td class="k">Generated</td><td class="v">{_esc(ctx["generated_at"])} '
+        '<span class="sub">(local machine clock)</span></td></tr>'
+        f'<tr><td class="k">Scope</td><td class="v">{_esc(selection)}</td></tr>'
+        '<tr><td class="k">Prepared by</td><td class="v sig">&nbsp;</td></tr>'
+        '</table>'
+        '<div class="cover-integrity"><b>Integrity &amp; verification.</b> This report is a frozen '
+        "snapshot. Its authenticity is anchored by a <b>SHA-256 content hash</b> taken over this "
+        "report&rsquo;s canonical HTML and recorded in the case&rsquo;s immutable report registry and "
+        'export manifest. To verify, recompute the SHA-256 of the report&rsquo;s <span class="mono">.html'
+        "</span> file and compare it against the registry. The hash value is deliberately not printed on "
+        "this page &mdash; a document cannot contain a verifiable hash of itself.</div>"
+        "</section>")
+
+
+def _effective_sections(ctx: dict) -> list[tuple[str, str]]:
+    """The sections to render for THIS report: the fixed content sections, plus the Glossary appendix ONLY
+    when the case actually uses a glossary term (FN-11). Both the TOC and the section bodies iterate this
+    same list, so a conditional appendix stays in lockstep — the P16 invariant holds (TOC targets ==
+    rendered section anchors)."""
+    sections = list(_REPORT_SECTIONS)
+    if ctx.get("glossary"):
+        sections.append(("glossary", "Glossary"))
+    return sections
+
+
+def _toc_section(sections: list[tuple[str, str]]) -> str:
+    """The table of contents (FN-12): every rendered section, linked to its ``<section>`` anchor. Driven by
+    the SAME effective list that emits the sections, so it can never list a section the report doesn't
+    render. The ``Contents`` heading is intentionally not itself a section anchor."""
+    items = "".join(f'<li><a href="#{slug}">{_esc(title)}</a></li>' for slug, title in sections)
+    return f'<nav class="toc"><h2>Contents</h2><ol>{items}</ol></nav>'
+
+
+def _sections_html(ctx: dict, sections: list[tuple[str, str]]) -> str:
+    """Render each section in ``sections`` as ``<section id="slug"><h2>Title</h2>…body…</section>``. The
+    anchor is on the wrapper; the heading stays a bare ``<h2>`` (so tests that split on a heading are
+    unaffected). Body content + order are unchanged from the pre-FN-12 report (plus the FN-11 glossary)."""
+    bodies = {
+        "methodology": f'<div class="methodology">{_methodology_section(ctx["methodology"])}</div>',
+        "graph": _GRAPH_BODY,
+        "risk-and-sanctions": _risk_section(ctx["risk"]),
+        "traces": _trace_section(ctx["traces"]),
+        "findings": _findings_section(ctx["findings"]),
+        "investigator-notes": _notes_section(ctx["notes"]),
+        "entities": _entities_section(ctx["entities"]),
+        "valuation-coverage": _valuation_section(ctx["valuation"]),
+        "scope-and-applied-bounds": _scope_section(ctx["scope_spec"]),
+        "list-of-exhibits": _exhibits_section(ctx["exhibits"]),
+        "chain-of-custody": _custody_section(ctx["custody"]),
+        "glossary": _glossary_section(ctx.get("glossary") or []),
+    }
+    return "".join(
+        f'\n  <section id="{slug}">\n  <h2>{_esc(title)}</h2>{bodies[slug]}\n  </section>'
+        for slug, title in sections)
+
+
 def render_html(ctx: dict) -> str:
     from ..theme import css_root_block, cytoscape_style_json
 
@@ -349,16 +783,20 @@ def render_html(ctx: dict) -> str:
     elements = [{"data": n} for n in ctx["graph"]["nodes"]] + \
                [{"data": e} for e in ctx["graph"]["edges"]]
     case = ctx["case"]
-    scope_json = json.dumps(ctx["scope_spec"], indent=2, sort_keys=True)
     # The token catalog as :root custom properties, ahead of report.css (which uses var(--bih-...)) — the
     # single source of truth shared with the live graph (no hardcoded hex in report.css).
     theme_vars = css_root_block()
+    # FN-12: a running page footer (case id + "Page N of M") via a 2nd @page rule appended after report.css.
+    footer_css = _footer_css(case.get("id"))
+    # FN-11/FN-12: the TOC and the section bodies iterate ONE effective list (glossary appended only when used).
+    sections = _effective_sections(ctx)
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>{_esc(ctx['title'])}</title>
-<style>{theme_vars}{css}</style></head>
+<style>{theme_vars}{css}{footer_css}</style></head>
 <body>
-  <h1>{_esc(ctx['title'])}</h1>
+  {_cover_section(ctx)}
+  {_toc_section(sections)}
   <p class="sub">Case: {_esc(case.get('title'))} &middot; generated {_esc(ctx['generated_at'])}</p>
 
   <div class="caveat">
@@ -369,27 +807,7 @@ def render_html(ctx: dict) -> str:
     Bitcoin input&rarr;output links are a labeled tracing <b>convention</b> (FIFO) or an explicit
     investigator assertion — never ground-truth flow.
   </div>
-
-  <h2>Graph</h2>
-  <div id="cy"></div>
-  <div class="legend">
-    <span>&#9679; address</span><span>&#9646; bitcoin transaction (routing)</span>
-    <span>&#9670; external (mint/burn/coinbase)</span><span>green = transfer</span>
-    <span>brown = tx input</span><span>red = tx output</span><span>dashed = provisional</span>
-    <span>&#9210; red halo = sanctioned/risk</span><span>teal ring = attributed entity</span>
-    <span>&#9888; possible-coinjoin</span><span>blue dashed = FIFO trace (convention)</span>
-    <span>&#9733; seed / anchor</span><span>edge label = value; width &prop; value</span>
-  </div>
-
-  <h2>Risk &amp; sanctions</h2>{_risk_section(ctx['risk'])}
-  <h2>Traces</h2>{_trace_section(ctx['traces'])}
-  <h2>Findings</h2>{_findings_section(ctx['findings'])}
-  <h2>Investigator notes</h2>{_notes_section(ctx['notes'])}
-  <h2>Entities</h2>{_entities_section(ctx['entities'])}
-  <h2>Valuation coverage</h2>{_valuation_section(ctx['valuation'])}
-
-  <h2>Scope &amp; applied bounds</h2>
-  <pre class="mono">{_esc(scope_json)}</pre>
+  {_sections_html(ctx, sections)}
 
   <div class="footer">Blockchain Investigation Hub — provenance-first case report. Every fact in the
     underlying case references the source query that produced it.</div>

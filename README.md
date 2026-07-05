@@ -192,9 +192,9 @@ before valuation finishes says so (`Valuation in progress at generation: M of N 
 **Build the desktop app (a standalone exe — no Python install needed).**
 
 ```bash
-make package         # npm run build, then PyInstaller bih.spec -> dist/BIH/ (windowed, ~55 MB)
+make package         # npm run build, then PyInstaller bih.spec -> dist/BIH/ (windowed, ~61 MB)
 make package-debug   # same, but a console build that prints tracebacks (debugging a frozen failure)
-make smoke-frozen    # run the built exe headlessly and assert the frozen DoD gate (15 checks)
+make smoke-frozen    # run the built exe headlessly and assert the frozen DoD gate (18 checks)
 ```
 
 `make package` produces a **one-folder** app at `dist/BIH/` — `BIH.exe` plus an `_internal/` folder
@@ -306,7 +306,7 @@ choices:
 ## 5. Data model (schema)
 
 SQLite, created by forward-only `yoyo` migrations under `backend/app/migrations/` (`schema_version` in
-`case_meta`; currently **v6**, migrations `0001`–`0010`). Canonical Pydantic shapes in
+`case_meta`; currently **v10**, migrations `0001`–`0014`). Canonical Pydantic shapes in
 `backend/app/models/`. Repository (idempotent upserts + append-only inserts + final-row freeze):
 `backend/app/db/repository.py`.
 
@@ -413,7 +413,7 @@ write, commits atomically; the raw file is promoted by atomic rename only after 
 **Invariant audits** (`backend/app/audits/`, `make audit`) — runnable checks that FAIL LOUDLY, encoding
 the invariants as queries: **provenance-completeness, no-dangling-fk, idempotency, final-immutability,
 no-fabricated-utxo-edge (Inv #5), append-only-claims, entity-resolution-sanity, cache-provenance-carried,
-valuation-subject-validity, bounds-recorded** (10/10 must pass). The two cross-run checks persist a
+valuation-subject-validity, bounds-recorded, trace-retraction-append-only** (11/11 must pass). The two cross-run checks persist a
 baseline sidecar (`.audit_baselines/`) that ships with the case.
 
 ---
@@ -612,7 +612,7 @@ backend/app/
   runtime.py               frozen-runtime config (P7): TLS via bundled certifi + OS keyring backend select
   db/                      connection (WAL + FK pragmas), yoyo migration runner (closes its own handle),
                            repository, shared-cache
-  migrations/              0001..0009 raw-SQL forward-only migrations
+  migrations/              0001..0014 raw-SQL forward-only migrations
   models/                  canonical Pydantic shapes (Family A/B/C + provenance)
   connectors/              base.py (+ etherscan/esplora/defillama/chainalysis/bitquery/arkham/misttrack/oklink),
                            imports/ (base/arkham/graphsense/ofac), registry.py (paid gating)

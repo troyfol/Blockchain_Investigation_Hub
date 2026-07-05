@@ -5,9 +5,6 @@ import {
 } from "./theme";
 import catalog from "./tokens.json";
 
-// Resolve a token's human label the same way the legend does.
-const _label = (id: string): string => CATALOG.find((tk) => tk.id === id)!.label;
-
 // Find the stylesheet rule for an exact selector.
 function rule(selector: string) {
   return buildCytoscapeStyle().find((r) => r.selector === selector);
@@ -139,9 +136,10 @@ describe("legend — context-aware from the catalog", () => {
     expect(items.some((i) => i.color === t("node.risk.sanctioned.halo"))).toBe(true);
     // Only present types: there are no transfer edges, so no transfer legend entry.
     expect(labels.some((l) => /transfer/i.test(l))).toBe(false);
-    // Present BTC edge types ARE shown (the old static legend omitted these).
-    expect(labels).toContain(_label("edge.tx_output.line"));
-    expect(labels).toContain(_label("edge.tx_input.line"));
+    // Present BTC edge types ARE shown (the old static legend omitted these). P35/UX-02 — the labels now name
+    // the arrow SHAPE channel ("Bitcoin input/output (…)") rather than the raw token label.
+    expect(labels.some((l) => /bitcoin input/i.test(l))).toBe(true);
+    expect(labels.some((l) => /bitcoin output/i.test(l))).toBe(true);
   });
 });
 
@@ -396,5 +394,34 @@ describe("graph theme — seed marker (centered on the node, marker off the text
     // The badge color comes from the catalog (the encoded seed-marker hex appears in the data-URI).
     const seedHex = t("node.seed.marker").replace("#", "%23");
     expect(r!.style["background-image"]).toContain(seedHex);
+  });
+});
+
+describe("edge disambiguation beyond color (P35/UX-02)", () => {
+  it("the three fact-edge kinds carry DISTINCT target-arrow shapes (grayscale / color-blind safe)", () => {
+    const shapes = ["transfer", "tx_input", "tx_output"].map(
+      (k) => rule(`edge[kind="${k}"]`)!.style["target-arrow-shape"]);
+    expect(shapes.every(Boolean)).toBe(true);       // each fact edge sets an explicit arrowhead
+    expect(new Set(shapes).size).toBe(3);           // three DISTINCT shapes — readable without color
+  });
+  it("keeps the three fact-edge COLORS mutually distinct too (a reinforcing, not sole, channel)", () => {
+    const colors = ["transfer", "tx_input", "tx_output"].map((k) => t(`edge.${k}.line`));
+    expect(new Set(colors).size).toBe(3);
+  });
+});
+
+describe("dashed-line semantics reconciled (P36/UX-04)", () => {
+  it("provisional / trace-convention / poison use DISTINCT dash patterns (decode without guessing)", () => {
+    const pat = (sel: string) => rule(sel)!.style["line-dash-pattern"] as number[] | undefined;
+    const prov = pat('edge[finality_status="provisional"]');
+    const fifo = pat('edge[trace="fifo"]');
+    const inv = pat('edge[trace="investigator"]');
+    const poison = pat("edge[?poison_suspect]");
+    for (const p of [prov, fifo, inv, poison]) expect(Array.isArray(p) && p!.length > 0).toBe(true);
+    const key = (a?: number[]) => (a ?? []).join(",");
+    // the three MEANING families read apart: finality ≠ trace-convention ≠ poison
+    expect(new Set([key(prov), key(fifo), key(poison)]).size).toBe(3);
+    // within the trace family, fifo and investigator still differ
+    expect(key(fifo)).not.toBe(key(inv));
   });
 });

@@ -1,4 +1,5 @@
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // Per-denomination filter panel (P8.7 #1): each native denomination/asset present in the current view
 // gets its OWN min (drop below) + fold (collapse below) threshold, in that asset's native units — so
@@ -43,10 +44,9 @@ export default function DenomPanel({ denominations, filters, onChange, onClose }
   };
 
   return (
-    <div style={backdrop} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={card}>
+    <Modal onClose={onClose} backdropStyle={backdrop} containerStyle={card} labelledBy="denom-title">
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h2 style={{ margin: 0, fontSize: 16, color: t("ui.text") }}>Per-denomination filters</h2>
+          <h2 id="denom-title" style={{ margin: 0, fontSize: 16, color: t("ui.text") }}>Per-denomination filters</h2>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose} aria-label="Close">✕</button>
         </div>
         <p style={{ fontSize: 11, color: t("ui.muted"), margin: 0 }}>
@@ -75,7 +75,6 @@ export default function DenomPanel({ denominations, filters, onChange, onClose }
           <button style={btn} onClick={() => onChange({})}>Clear all</button>
           <button style={btn} onClick={onClose}>Done</button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

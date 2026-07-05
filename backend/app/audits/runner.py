@@ -59,6 +59,7 @@ def run_audits(db_path: str | None = None, baseline_dir: str | None = None,
         conn=get_connection(db_path, create_parents=False),
         db_path=Path(db_path),
         baselines=store,
+        rebaselined=frozenset(rebaseline or []),  # let checks distinguish an explicit re-baseline (P27)
     )
     results: list[AuditResult] = []
     try:

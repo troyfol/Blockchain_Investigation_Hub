@@ -202,12 +202,19 @@ def cytoscape_style() -> list[dict]:
             "width": 1.6, "line-color": t("edge.default.line"),
             "target-arrow-color": t("edge.default.line"), "target-arrow-shape": "triangle",
             "curve-style": "bezier", "arrow-scale": 0.85}},
+        # P35/UX-02 — a SECOND, COLOR-INDEPENDENT channel mirrored from theme.ts::buildCytoscapeStyle: each
+        # fact-edge kind carries a DISTINCT target-arrow shape (triangle = EVM transfer · tee/bar = BTC input ·
+        # vee = BTC output) so the three read apart in the grayscale/paper report, not by hue alone. tx_input is
+        # also shifted off the amber band (tokens.json). Keep in lockstep with the TS twin.
         {"selector": 'edge[kind="transfer"]', "style": {
-            "line-color": t("edge.transfer.line"), "target-arrow-color": t("edge.transfer.line")}},
+            "line-color": t("edge.transfer.line"), "target-arrow-color": t("edge.transfer.line"),
+            "target-arrow-shape": "triangle"}},
         {"selector": 'edge[kind="tx_input"]', "style": {
-            "line-color": t("edge.tx_input.line"), "target-arrow-color": t("edge.tx_input.line")}},
+            "line-color": t("edge.tx_input.line"), "target-arrow-color": t("edge.tx_input.line"),
+            "target-arrow-shape": "tee"}},
         {"selector": 'edge[kind="tx_output"]', "style": {
-            "line-color": t("edge.tx_output.line"), "target-arrow-color": t("edge.tx_output.line")}},
+            "line-color": t("edge.tx_output.line"), "target-arrow-color": t("edge.tx_output.line"),
+            "target-arrow-shape": "vee"}},
         {"selector": "edge[?value_label]", "style": {
             "width": "data(ew)", "label": "data(value_label)", "font-size": 7,
             "color": t("edge.value.label"), "text-background-color": t("edge.value.labelBg"),
@@ -232,19 +239,22 @@ def cytoscape_style() -> list[dict]:
             "underlay-opacity": 0.45}},
         {"selector": 'edge[trace="fifo"]', "style": {
             "line-color": t("edge.trace.fifo.line"), "target-arrow-color": t("edge.trace.fifo.line"),
-            "line-style": "dashed", "width": 2.4, "label": "fifo", "font-size": 8,
+            "line-style": "dashed", "line-dash-pattern": [12, 4], "width": 2.4, "label": "fifo", "font-size": 8,
             "color": t("edge.trace.fifo.label"), "text-background-color": t("edge.trace.fifo.labelBg"),
             "text-background-opacity": 0.85, "text-background-padding": 2,
             "text-background-shape": "roundrectangle", "text-rotation": "autorotate",
             "text-margin-y": "data(label_dy)", "min-zoomed-font-size": 6}},
         {"selector": 'edge[trace="investigator"]', "style": {
             "line-color": t("edge.trace.investigator.line"),
-            "target-arrow-color": t("edge.trace.investigator.line"), "line-style": "dotted",
-            "width": 2.4, "label": "manual", "font-size": 8,
+            "target-arrow-color": t("edge.trace.investigator.line"), "line-style": "dashed",
+            "line-dash-pattern": [12, 4, 2, 4], "width": 2.4, "label": "manual", "font-size": 8,
             "color": t("edge.trace.investigator.line"), "text-rotation": "autorotate",
             "text-margin-y": "data(label_dy)", "min-zoomed-font-size": 6}},
+        # P36/UX-04 — mirror the frontend dash-MEANING families (theme.ts): provisional (finality) = fine dots
+        # [1,4]; fifo/investigator (trace convention) = long dashes above. Named in the report legend so a
+        # dashed edge decodes on paper without guessing. Keep in lockstep with buildCytoscapeStyle.
         {"selector": 'edge[finality_status="provisional"]', "style": {
-            "line-style": "dashed", "opacity": 0.55}},
+            "line-style": "dashed", "line-dash-pattern": [1, 4], "opacity": 0.55}},
         {"selector": 'node[finality_status="provisional"]', "style": {
             "border-width": 2, "border-color": t("node.provisional.border"), "border-style": "dashed",
             "background-opacity": 0.5}},

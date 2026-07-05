@@ -154,6 +154,7 @@ def test_seeded_case_all_audits_green(case):
         "provenance-completeness", "cache-provenance-carried", "no-dangling-fk",
         "idempotency", "final-immutability", "append-only-claims", "bounds-recorded",
         "no-fabricated-utxo-edge", "valuation-subject-validity", "entity-resolution-sanity",
+        "trace-retraction-append-only",  # P9 / FN-04 — audit count 10 → 11
     }
 
 
@@ -308,12 +309,16 @@ def test_cache_copy_is_idempotent(case, tmp_path):
 
 
 def test_cache_copy_rejects_unsupported_claim(case, tmp_path):
-    # balance_snapshot / valuation need extra FK remapping — out of v1 cache scope.
+    # `valuation` is not copied on the address-claim path (its subject FK to transfer/tx_output needs a
+    # different remap; the valuation service copies a cached PRICE directly). `balance_snapshot` IS now
+    # supported (FN-23) — via its own `copy_balance_snapshot_into_case`, not this address-claim entry point.
     conn, _ = case
     cache_path = tmp_path / "library_cache.db"
     migrate_cache(cache_path)
     cache = get_connection(cache_path)
     with pytest.raises(ValueError):
+        copy_address_claim_into_case(conn, cache, claim_table="valuation", claim_id="x")
+    with pytest.raises(ValueError):  # balance_snapshot has a dedicated copier, not the address-claim one
         copy_address_claim_into_case(conn, cache, claim_table="balance_snapshot", claim_id="x")
     cache.close()
 

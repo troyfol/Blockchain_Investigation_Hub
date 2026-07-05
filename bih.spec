@@ -81,6 +81,8 @@ datas += _file("frontend/src/theme/tokens.json", "frontend/src/theme")          
 datas += _file("backend/app/normalization/data/graphsense_confidence.csv",      # .graphsense_confidence
                "backend/app/normalization/data")
 datas += _tree("backend/app/intel", "backend/app/intel")                        # P8.7 intel snapshots
+datas += _file("examples/Sample_Tornado_Cash/Sample_Tornado_Cash.casefile",     # P39 first-run sample case
+               "examples/Sample_Tornado_Cash")
 
 # certifi cacert.pem (== --collect-data certifi) — robust HTTPS for the connectors (runtime.py).
 datas += collect_data_files("certifi")

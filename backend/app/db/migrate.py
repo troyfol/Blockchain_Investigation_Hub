@@ -33,8 +33,11 @@ MIGRATIONS_DIR = resource_path("backend/app/migrations")
 # + content-based ux_transfer) -> version 3. Investigator display-label overrides add 0008
 # (investigator_label) -> version 4. Widening that override to transactions + flows (transfer/tx_output)
 # rebuilds the table's CHECK in 0009 -> version 5. P8.8 clustering widens entity.origin (+ heuristic-cluster)
-# and adds erc20_approval in 0010 -> version 6.
-CURRENT_SCHEMA_VERSION = 6
+# and adds erc20_approval in 0010 -> version 6. FN-04 trace edit/retract adds the two append-only
+# trace-retraction tables in 0011 -> version 7. FN-17 manual cross-chain bridge link adds
+# trace_bridge_link in 0012 -> version 8. FN-15 per-sub-signal risk detail adds risk_detail in 0013 -> version 9.
+# P27/FN-19 in-DB append-only audit_baseline anchor adds 0014 -> version 10.
+CURRENT_SCHEMA_VERSION = 10
 
 
 class SchemaTooNewError(Exception):

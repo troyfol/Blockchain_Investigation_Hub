@@ -141,6 +141,14 @@ def main() -> int:
         tls = probes.get("tls", {})
         check("TLS: bundled certifi CA exists + client builds", tls.get("exists") is True, json.dumps(tls))
 
+        # 9. P39 — the bundled first-run sample imports + opens + reads back through the frozen app
+        sample = probes.get("sample", {})
+        check("sample: bundled + available in the frozen app", sample.get("available") is True, json.dumps(sample))
+        check("sample: imported + verified (clean bundle)",
+              sample.get("imported") is True and sample.get("verified") is True, json.dumps(sample))
+        check("sample: /api/graph 200 with nodes (reads back)",
+              sample.get("graph_status") == 200 and sample.get("nodes", 0) > 0, json.dumps(sample))
+
     return _report(checks, out, err)
 
 

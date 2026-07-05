@@ -3,6 +3,7 @@ import {
   CATALOG, type CanvasPreset, clearCustomOverride, currentColor, getActivePreset,
   hasOverride, isLockedPreset, resetCustomOverrides, setActivePreset, setCustomOverride, t,
 } from "./theme/theme";
+import Modal from "./Modal";
 
 // Customize-colors drawer (P6) — edits the CUSTOM preset's overrides only. Right-docked so the canvas
 // stays visible and updates LIVE as you pick (every edit bumps the theme store -> App re-renders -> the
@@ -47,11 +48,15 @@ export default function ThemeCustomize({ onClose }: Props) {
     try { setCustomOverride(id, value); } catch { /* locked race — ignored (editor is disabled) */ }
   };
 
+  // Right-docked drawer with a SUBTLE scrim backdrop (P33): click-out + Esc dismiss (via Modal/P31), and the
+  // scrim stays light (canvas.background at ~25% alpha) so the canvas remains VISIBLE for live color preview
+  // while you pick. role="dialog" + aria-modal + aria-labelledby all come from Modal.
   return (
-    <div style={panel}>
+    <Modal onClose={onClose} containerStyle={panel} labelledBy="theme-title"
+           backdropStyle={{ position: "fixed", inset: 0, zIndex: 69, background: `${t("canvas.background")}40` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px",
                     borderBottom: `1px solid ${t("ui.border")}` }}>
-        <strong style={{ color: t("ui.text"), fontSize: 14 }}>Customize colors</strong>
+        <strong id="theme-title" style={{ color: t("ui.text"), fontSize: 14 }}>Customize colors</strong>
         <span style={{ ...hint, color: t("node.seed.marker") }}>· Custom preset</span>
         <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose} aria-label="Close customize">✕</button>
       </div>
@@ -90,7 +95,7 @@ export default function ThemeCustomize({ onClose }: Props) {
                   <div key={tk.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input type="color" value={value} disabled={locked} aria-label={tk.label}
                            onChange={(e) => edit(tk.id, e.target.value)}
-                           style={{ width: 28, height: 24, padding: 0, border: `1px solid ${t("ui.border")}`,
+                           style={{ width: 32, height: 26, padding: 0, border: `1px solid ${t("ui.border")}`,
                                     borderRadius: 4, background: "transparent",
                                     cursor: locked ? "not-allowed" : "pointer" }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -109,6 +114,6 @@ export default function ThemeCustomize({ onClose }: Props) {
           </section>
         ))}
       </div>
-    </div>
+    </Modal>
   );
 }

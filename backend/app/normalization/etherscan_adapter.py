@@ -55,6 +55,10 @@ class ParsedTransfer:
     # (the connector passes `from_address_display or from_address` to upsert_address).
     from_address_display: str | None = None
     to_address_display: str | None = None
+    # A source-reported value-at-time (total USD) for this movement, when the export carries one (e.g.
+    # Arkham `historicalUSD`). Drives a SECOND sourced `valuation` claim alongside DeFiLlama — never
+    # merged (Invariant #4). None when the source did not price the movement (an honest gap, no row).
+    historical_usd: str | None = None
 
 
 @dataclass

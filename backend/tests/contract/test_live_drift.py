@@ -145,6 +145,13 @@ def test_misttrack_risk_shape():
     assert isinstance(payload, dict) and "data" in payload
     data = payload.get("data") or {}
     assert "score" in data, f"misttrack risk drifted; data keys: {set(data)}"
+    # FN-26 (P21): confirm the risk_detail[] sub-fields P20's `risk_detail` mapping reads (signal=risk_type,
+    # score=percent). Only asserts when the live payload carries a breakdown; surfaces drift in these names so
+    # the `score=percent` vs `volume` TODO can be resolved against the real V2/V3 envelope.
+    for d in (data.get("risk_detail") or []):
+        assert isinstance(d, dict) and "risk_type" in d, \
+            f"misttrack risk_detail[] drifted; entry: {d if isinstance(d, dict) else type(d).__name__}"
+        assert "percent" in d or "volume" in d, f"misttrack risk_detail[] has no percent/volume; keys: {set(d)}"
 
 
 def test_bitquery_graphql_responds():

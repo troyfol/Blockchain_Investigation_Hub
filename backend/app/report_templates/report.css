@@ -4,13 +4,25 @@
    hardcoded hex here — the report shares its palette with the live graph, and the customization UI
    overrides both from one place. */
 * { box-sizing: border-box; }
+/* Court-grade print pagination (P14/UX-10). The DEFAULT report path prints via the OS Edge/Chrome
+   `--print-to-pdf` CLI, which honors CSS `@page` size + margins (the Playwright fallback is set to
+   preferCSSPageSize so it honors these too) — so exhibits get consistent A4 margins with no engine-specific
+   flags. `break-inside: avoid` keeps table ROWS and key blocks from splitting across a page; headings never
+   strand at a page bottom; a wide table's header repeats on each page it spans. */
+@page { size: A4; margin: 16mm 15mm 18mm; }
 body {
   font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
   color: var(--bih-report-text); margin: 0; padding: 28px 34px; font-size: 12px; line-height: 1.45;
 }
-h1 { font-size: 21px; margin: 0 0 2px; }
-h2 { font-size: 15px; margin: 22px 0 8px; border-bottom: 1.5px solid var(--bih-report-heading-border); padding-bottom: 3px; }
-h3 { font-size: 12.5px; margin: 12px 0 4px; }
+h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: 0.2px; }
+h2 {
+  font-size: 15.5px; margin: 22px 0 8px; border-bottom: 1.5px solid var(--bih-report-heading-border);
+  padding-bottom: 3px; letter-spacing: 0.2px; break-after: avoid; break-inside: avoid;
+}
+h3 { font-size: 12.5px; margin: 12px 0 4px; break-after: avoid; }
+thead { display: table-header-group; }        /* repeat table headers on every page a table spans */
+tr { break-inside: avoid; }                    /* never split a row across a page boundary */
+.caveat, .legend, ul, h3 + p, h3 + table { break-inside: avoid; }
 .sub { color: var(--bih-report-subtext); font-size: 11px; }
 .caveat {
   background: var(--bih-report-caveat-bg); border: 1px solid var(--bih-report-caveat-border); border-radius: 5px;
@@ -33,8 +45,65 @@ th { background: var(--bih-report-table-headerBg); font-weight: 600; }
 .pill.missing { background: var(--bih-report-pill-missing-bg); color: var(--bih-report-pill-missing-text); }
 .pill.sanctioned { background: var(--bih-report-pill-sanctioned-bg); color: var(--bih-report-pill-sanctioned-text); }
 .pill.elevated { background: var(--bih-report-pill-elevated-bg); color: var(--bih-report-pill-elevated-text); }
-#cy { width: 100%; height: 460px; border: 1px solid var(--bih-report-cy-border); border-radius: 5px; background: var(--bih-canvas-background); }
+#cy { width: 100%; height: 520px; border: 1px solid var(--bih-report-cy-border); border-radius: 5px; background: var(--bih-canvas-background); break-inside: avoid; }
 .legend { font-size: 10px; color: var(--bih-report-subtext); margin-top: 4px; }
 .legend span { margin-right: 12px; }
 .footer { margin-top: 26px; font-size: 10px; color: var(--bih-report-footer-text); border-top: 1px solid var(--bih-report-footer-border); padding-top: 8px; }
 .empty { color: var(--bih-report-empty); font-style: italic; }
+/* Court-formal scaffolding (P16/FN-12): a cover page, a table of contents, and a running @page footer
+   (case id + "Page N of M") injected as a 2nd @page rule by services/reporting.py. The report's own
+   content_hash cannot be printed on the cover (it hashes this very HTML), so the cover states how to
+   verify instead. Cover + TOC each take their own page (break-after: page). */
+.cover { break-after: page; padding: 20px 6px 0; }
+.cover-org { font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--bih-report-subtext); }
+.cover-title { font-size: 30px; margin: 64px 0 6px; letter-spacing: 0.2px; }
+.cover-kind { font-size: 13px; color: var(--bih-report-subtext); margin-bottom: 44px; }
+.cover-meta { width: auto; min-width: 380px; margin: 0 0 8px; }
+.cover-meta td { border: none; border-bottom: 1px solid var(--bih-report-table-border); padding: 8px 10px; vertical-align: baseline; }
+.cover-meta .k { width: 150px; color: var(--bih-report-subtext); font-weight: 600; }
+.cover-meta .v { font-size: 13px; }
+.cover-meta .sig { border-bottom: 1px solid var(--bih-report-text); }   /* a court-formal signature line */
+.cover-integrity {
+  font-size: 11px; line-height: 1.5; color: var(--bih-report-text); margin-top: 30px;
+  background: var(--bih-report-caveat-bg); border: 1px solid var(--bih-report-caveat-border);
+  border-radius: 5px; padding: 10px 12px;
+}
+.cover-integrity b { color: var(--bih-report-caveat-text); }
+.toc { break-after: page; }
+.toc ol { margin: 6px 0; padding-left: 26px; line-height: 1.9; }
+.toc a { color: var(--bih-report-text); text-decoration: none; }
+/* Case-scoped glossary appendix (P17/FN-11): a definition list of only the terms this case uses. */
+.glossary { margin: 6px 0; }
+.glossary dt { font-weight: 600; margin-top: 8px; }
+.glossary dd { margin: 1px 0 0 18px; color: var(--bih-report-text); font-size: 11px; line-height: 1.45; }
+/* Methodology section (FN-08/P13): tighter sub-headings, a narrow finality table, right-aligned counts. */
+.methodology h3 { font-size: 12px; margin: 12px 0 3px; color: var(--bih-report-caveat-text); }
+.methodology p { margin: 3px 0 9px; }
+.methodology table { width: auto; min-width: 320px; }
+.methodology .count { text-align: right; font-variant-numeric: tabular-nums; }
+/* List of Exhibits (P15/FN-10): stable numbers + FULL content hash; fixed layout so the hash wraps (P14). */
+.exhibits { table-layout: fixed; }
+.exhibits th:nth-child(1) { width: 9%; }    /* exhibit N */
+.exhibits th:nth-child(6) { width: 32%; }   /* content hash */
+.exhibits td { font-size: 10.5px; overflow-wrap: anywhere; vertical-align: top; }
+.exhibits .hash { font-family: "Consolas", "SFMono-Regular", monospace; font-size: 9px; word-break: break-all; color: var(--bih-report-subtext); }
+/* Applied-bounds scope (P14): a compact key/value table (replaces the old raw <pre> JSON dump). */
+.scope { table-layout: fixed; width: auto; min-width: 420px; }
+.scope td:first-child, .scope th:first-child { width: 240px; }
+.scope td { overflow-wrap: anywhere; }
+/* Chain-of-custody appendix (P2/FN-02): compact rows; params + FULL untruncated hashes wrap inside the cell.
+   P14: table-layout:fixed + explicit column widths so the wide FULL hash wraps within its column (never
+   clipped / never forcing horizontal overflow) when the appendix paginates in print. */
+.custody { table-layout: fixed; }
+.custody th:nth-child(1) { width: 9%; }   /* connector */
+.custody th:nth-child(2) { width: 11%; }  /* capability */
+.custody th:nth-child(3) { width: 11%; }  /* endpoint */
+.custody th:nth-child(4) { width: 16%; }  /* params / bounds */
+.custody th:nth-child(5) { width: 12%; }  /* retrieved */
+.custody th:nth-child(6) { width: 7%; }   /* status */
+.custody th:nth-child(7) { width: 6%; }   /* facts/claims */
+.custody th:nth-child(8) { width: 28%; }  /* raw-response hash (SHA-256) */
+.custody td { font-size: 10.5px; overflow-wrap: anywhere; }
+.custody .params { font-family: "Consolas", "SFMono-Regular", monospace; font-size: 9.5px; word-break: break-all; }
+.custody .hash { font-family: "Consolas", "SFMono-Regular", monospace; font-size: 9px; word-break: break-all; color: var(--bih-report-subtext); }
+.custody .count { text-align: right; font-variant-numeric: tabular-nums; }

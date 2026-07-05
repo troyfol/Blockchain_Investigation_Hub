@@ -39,6 +39,8 @@ NATURAL_KEYS = {
                  "COALESCE(to_address_id,'') || '|' || asset_id || '|' || amount || '|' || occurrence"),
     "tx_output": "transaction_id || '|' || output_index",
     "tx_input": "transaction_id || '|' || input_index",
+    # FN-15: one sub-signal per (parent risk_assessment, signal) — the ux_risk_detail unique index enforces it.
+    "risk_detail": "risk_assessment_id || '|' || signal",
 }
 
 
@@ -109,6 +111,19 @@ def check_no_dangling_fk(ctx: AuditContext) -> AuditResult:
     """):
         offending.append({"kind": "entity.canonical_membership_id", "id": r["id"],
                           "canonical_membership_id": r["canonical_membership_id"]})
+
+    # trace_bridge_link src/dst poly-refs (FN-17 cross-chain link — a CLAIM; each side references a value
+    # movement transfer|tx_output, like valuation.subject_id).
+    for side in ("src", "dst"):
+        for r in _antijoin(conn, f"""
+            SELECT id, {side}_subject_type AS st, {side}_subject_id AS sid FROM trace_bridge_link b
+            WHERE ({side}_subject_type='transfer'
+                     AND NOT EXISTS (SELECT 1 FROM transfer t  WHERE t.id=b.{side}_subject_id))
+               OR ({side}_subject_type='tx_output'
+                     AND NOT EXISTS (SELECT 1 FROM tx_output o WHERE o.id=b.{side}_subject_id))
+        """):
+            offending.append({"kind": f"trace_bridge_link.{side}_subject_id", "id": r["id"],
+                              "subject_type": r["st"], "subject_id": r["sid"]})
 
     return AuditResult("no-dangling-fk", passed=not offending, offending=offending)
 

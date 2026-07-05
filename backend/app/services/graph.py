@@ -174,6 +174,12 @@ def aggregate_parallel_edges(edges: list[dict]) -> list[dict]:
             "parallel_aggregate": True, "count": count,
             "underlying": sorted(m["id"] for m in members),
         }
+        # A rollup can span >1 acquiring source — keep the DISTINCT set side-by-side (Invariant #4:
+        # never collapse multi-source into one). No single source_query_id on a rollup (it's many); the
+        # per-movement drill-through lives on the underlying movements in the SidePanel.
+        agg_sources = sorted({m.get("source_name") for m in members if m.get("source_name")})
+        if agg_sources:
+            agg["source_names"] = agg_sources
         if total_usd is not None:
             agg["value_usd"] = total_usd
             agg["value_usd_label"] = f"{_usd(total_usd)}{times}"
@@ -286,14 +292,24 @@ def _node_summaries(conn) -> dict:
     entity_id -> {member address_ids, name, origin} — so the caller can draw co-spend clusters /
     sourced entities as compound parent nodes.
     """
+    # risk LEVEL for styling + the distinct SOURCE(s) behind it (UX-03 hover cue: "risk: ofac-sdn"). The
+    # sources are kept side-by-side (Invariant #4) — the hover names every asserting source, never one.
     risk: dict[str, str] = {}
-    for r in conn.execute("SELECT address_id, category FROM risk_assessment").fetchall():
+    risk_sources: dict[str, set] = defaultdict(set)
+    for r in conn.execute("SELECT address_id, category, source FROM risk_assessment").fetchall():
         if r["category"] == "sanctioned":
             risk[r["address_id"]] = "sanctioned"          # sanctioned is the strongest signal — it wins
         elif risk.get(r["address_id"]) != "sanctioned":
             risk[r["address_id"]] = "elevated"
-    attributed = {r["address_id"] for r in conn.execute(
-        "SELECT DISTINCT address_id FROM attribution").fetchall()}
+        if r["source"]:
+            risk_sources[r["address_id"]].add(r["source"])
+    # Attribution presence + the distinct source(s) behind it (UX-03 hover cue), collected in one pass.
+    attributed: set[str] = set()
+    attribution_sources: dict[str, set] = defaultdict(set)
+    for r in conn.execute("SELECT address_id, source FROM attribution").fetchall():
+        attributed.add(r["address_id"])
+        if r["source"]:
+            attribution_sources[r["address_id"]].add(r["source"])
 
     # Investigator ANNOTATIONS (free-text notes; migration 0004) — a target with >=1 annotation gets a
     # green outline on the canvas. Distinct from attribution (a sourced claim). Keyed per object type.
@@ -332,7 +348,8 @@ def _node_summaries(conn) -> dict:
             entity_label[m["address_id"]] = m["name"]
         if m["flags"] and "possible-coinjoin" in m["flags"]:
             coinjoin.add(m["address_id"])
-    return {"risk": risk, "attributed": attributed, "coinjoin": coinjoin,
+    return {"risk": risk, "risk_sources": risk_sources, "attributed": attributed,
+            "attribution_sources": attribution_sources, "coinjoin": coinjoin,
             "entity_label": entity_label, "groups": groups, "custom_label": custom_label,
             "custom_label_tx": custom_label_tx,
             "annotated_addr": annotated_addr, "annotated_tx": annotated_tx}
@@ -449,6 +466,18 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
     native_asset_ids = {r["id"] for r in conn.execute(
         "SELECT id FROM asset WHERE contract_address IS NULL").fetchall()}
 
+    # Provenance source per fact row (UX-03 / FN-01 acceptance #4): the connector that acquired the row +
+    # its source_query id, so the canvas can NAME the source on hover and drill through to the exact query
+    # (P1's /api/source_query/{id}). Batch-loaded maps (movement_id -> (connector, source_query_id)),
+    # joined to the small source_query table (one row per acquisition) — same batch-load pattern as above,
+    # no per-edge N+1. tx_input sources are read inline in its own query below.
+    transfer_src = {r["id"]: (r["connector"], r["source_query_id"]) for r in conn.execute(
+        "SELECT tr.id, tr.source_query_id, sq.connector FROM transfer tr "
+        "LEFT JOIN source_query sq ON sq.id = tr.source_query_id").fetchall()}
+    txout_src = {r["id"]: (r["connector"], r["source_query_id"]) for r in conn.execute(
+        "SELECT o.id, o.source_query_id, sq.connector FROM tx_output o "
+        "LEFT JOIN source_query sq ON sq.id = o.source_query_id").fetchall()}
+
     # USD value-at-time per movement (DeFiLlama valuation claims; subject_id == movement_id). Keep ONE
     # representative figure per movement (highest confidence) for the DISPLAY value + width; a movement
     # valued by >1 source is flagged `value_contested` (the claims themselves stay side-by-side in the DB —
@@ -509,8 +538,14 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
             # `[?flag]` selectors clean). The frontend styles risk/attribution/coinjoin from these.
             if addr_id in summ["risk"]:
                 node["risk_level"] = summ["risk"][addr_id]
+                rs = summ["risk_sources"].get(addr_id)
+                if rs:
+                    node["risk_sources"] = sorted(rs)   # UX-03 hover: name every asserting source (Inv #4)
             if addr_id in summ["attributed"]:
                 node["has_attribution"] = True
+                asrc = summ["attribution_sources"].get(addr_id)
+                if asrc:
+                    node["attribution_sources"] = sorted(asrc)
             if addr_id in summ["entity_label"]:
                 node["entity_label"] = summ["entity_label"][addr_id]
             if addr_id in summ["coinjoin"]:
@@ -587,6 +622,13 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
         ev = {"id": f"mv:{mid}", "amount": m["amount"], "value_label": value_label,
               "value_num": value_num, "asset_symbol": symbol, "finality_status": m["finality_status"],
               **_seq_fields(m["transaction_id"])}  # the movement's tx block_height (ordering key)
+        # The acquiring source (connector) + its source_query id — the hover cue + drill-through (UX-03).
+        _src_connector, _src_sqid = (transfer_src if m["paradigm"] == "evm" else txout_src).get(
+            mid, (None, None))
+        if _src_connector:
+            ev["source_name"] = _src_connector
+        if _src_sqid:
+            ev["source_query_id"] = _src_sqid
         # value_num = the native amount; asset_symbol = its unit (ETH/BTC/USDC). Together these let the
         # view rank/size/threshold a movement by NATIVE amount when it has no USD price (P8.6 "unpriced ≠
         # dust") and power the USD<->native display toggle — per-asset (native isn't cross-asset comparable).
@@ -626,8 +668,10 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
     # Bitcoin input edges: input address -> tx node (the view only carries the output side). Inputs are
     # always native BTC (no asset_id column on tx_input) — format with the chain's native asset.
     for i in conn.execute(
-        "SELECT i.id, i.transaction_id, i.address_id, i.amount, t.finality_status, t.chain "
-        "FROM tx_input i JOIN transaction_ t ON t.id=i.transaction_id" + _in_where, _in_params
+        "SELECT i.id, i.transaction_id, i.address_id, i.amount, i.source_query_id, "
+        "t.finality_status, t.chain, sq.connector "
+        "FROM tx_input i JOIN transaction_ t ON t.id=i.transaction_id "
+        "LEFT JOIN source_query sq ON sq.id=i.source_query_id" + _in_where, _in_params
     ).fetchall():
         tx = transaction_node(i["transaction_id"])
         symbol, decimals = native_by_chain.get(i["chain"], (None, None))
@@ -635,11 +679,16 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
         if i["address_id"] and value_num:
             # an input address spends native (no USD priced on inputs). COR-03: sum exact Decimal.
             out_nat[i["address_id"]] += _native_dec(i["amount"], decimals)
-        edges.append({"id": f"in:{i['id']}", "source": endpoint(i["address_id"]), "target": tx,
-                      "kind": "tx_input", "paradigm": "utxo", "amount": i["amount"],
-                      "value_label": value_label, "value_num": value_num, "asset_symbol": symbol,
-                      "no_price": True,
-                      "finality_status": i["finality_status"], **_seq_fields(i["transaction_id"])})
+        in_edge = {"id": f"in:{i['id']}", "source": endpoint(i["address_id"]), "target": tx,
+                   "kind": "tx_input", "paradigm": "utxo", "amount": i["amount"],
+                   "value_label": value_label, "value_num": value_num, "asset_symbol": symbol,
+                   "no_price": True,
+                   "finality_status": i["finality_status"], **_seq_fields(i["transaction_id"])}
+        if i["connector"]:                       # the acquiring source (UX-03 hover cue) + drill-through
+            in_edge["source_name"] = i["connector"]
+        if i["source_query_id"]:
+            in_edge["source_query_id"] = i["source_query_id"]
+        edges.append(in_edge)
 
     # Trace overlay (Bitcoin): a `trace_btc_link` is a labeled apportionment CONVENTION (basis fifo /
     # investigator), NEVER a ledger fact. Surface it as a distinct trace edge between the source- and
@@ -659,7 +708,9 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
     # each trace edge gets an alternating vertical offset the stylesheet applies as text-margin-y.
     _label_dy = [-10, 12, -20, 22]
     for n, l in enumerate(conn.execute(
-            "SELECT id, trace_id, source_output_id, dest_output_id, basis FROM trace_btc_link").fetchall()):
+            "SELECT l.id, l.trace_id, l.source_output_id, l.dest_output_id, l.basis FROM trace_btc_link l "
+            "WHERE NOT EXISTS (SELECT 1 FROM trace_btc_link_retraction r WHERE r.trace_btc_link_id=l.id)"
+            ).fetchall()):
         edge = {"id": f"tr:{l['id']}", "source": endpoint(out_addr.get(l["source_output_id"])),
                 "target": endpoint(out_addr.get(l["dest_output_id"])), "kind": "trace",
                 "paradigm": "trace", "trace": l["basis"], "trace_id": l["trace_id"],
@@ -720,3 +771,38 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
     scale_edge_widths(fact)
 
     return {"nodes": list(nodes.values()), "edges": edges}
+
+
+def bound_subgraph(graph: dict, limit: int) -> dict:
+    """P25/FN-20: bound an already-built graph to at most ``limit`` PRIMARY (address/tx) nodes for a
+    LEA-scale case — keep the highest-degree nodes (deterministic tiebreak by id), the edges among them,
+    and any group (compound) parent that still contains a kept child; add a ``meta`` block reporting the
+    bound. A read-only reshaping of the payload — it drops nodes/edges for display, never a fact.
+
+    ``limit`` counts primary nodes; a structural group parent is re-added on top of the cap when one of its
+    children survives (so a compound box is never left dangling), so ``returned_nodes`` may slightly exceed
+    ``limit``. When ``limit`` already covers every primary node, the graph is returned intact (truncated
+    False). Deterministic: same case + same limit → same subgraph (so a report/exhibit is reproducible)."""
+    nodes, edges = graph["nodes"], graph["edges"]
+    primary = [n for n in nodes if n.get("kind") != "group"]
+    if limit >= len(primary):
+        return {**graph, "meta": {"total_nodes": len(nodes), "returned_nodes": len(nodes),
+                                  "limit": limit, "truncated": False}}
+    deg: dict[str, int] = defaultdict(int)
+    for e in edges:
+        deg[e["source"]] += 1
+        deg[e["target"]] += 1
+    ranked = sorted(primary, key=lambda n: (-deg[n["id"]], n["id"]))
+    keep = {n["id"] for n in ranked[:limit]}
+    keep |= {n["parent"] for n in nodes if n["id"] in keep and n.get("parent")}   # keep needed group boxes
+    kept_nodes = []
+    for n in nodes:
+        if n["id"] not in keep:
+            continue
+        if n.get("parent") and n["parent"] not in keep:
+            n = {k: v for k, v in n.items() if k != "parent"}   # its group was dropped → detach cleanly
+        kept_nodes.append(n)
+    kept_edges = [e for e in edges if e["source"] in keep and e["target"] in keep]
+    return {"nodes": kept_nodes, "edges": kept_edges,
+            "meta": {"total_nodes": len(nodes), "returned_nodes": len(kept_nodes),
+                     "limit": limit, "truncated": True}}

@@ -9,6 +9,16 @@ of the order/position each source assigns (Invariant #7), while legitimately-rep
 are still kept distinct, and genuinely DISAGREEING facts (different parties/amount) stay side-by-side
 (different content -> different rows; never collapsed, Invariant #4).
 
+FN-24 truncation caveat (P19): Arkham's `unitValue` is a DISPLAY value; for a high-decimal asset it can
+carry FEWER fractional digits than the asset's `decimals`, so its low-order base units are display-rounded
+(not source-verified) — a DIFFERENT `amount` from the chain-exact figure Etherscan/Bitquery report. Such a
+row is therefore a distinct content key: it is deliberately NOT collapsed into the exact row (that would
+require GUESSING the two are the same movement — Invariant #4 forbids silently collapsing a disagreement).
+It stays side-by-side, and the Arkham adapter/connector flags it (`notes["truncation_risk"]`) so the
+display-precision figure is never taken as silently authoritative; the authoritative low-order value comes
+from an idempotent chain re-fetch (Invariants #6/#7). Identical-content amounts (the common case, and the
+position/log-order residual) still dedup via `occurrence` as above.
+
 Pure (no HTTP, no DB); call it on the parsed bundles before the connector writes them.
 """
 

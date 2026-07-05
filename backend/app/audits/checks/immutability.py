@@ -47,8 +47,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime, timezone
 
 from .. import AuditContext, AuditResult, audit_check
+from ..baselines import append_anchor, read_latest_anchor
 
 FINAL_BASELINE = "final-immutability"
 CLAIMS_BASELINE = "append-only-claims"
@@ -159,23 +161,105 @@ def _final_snapshot(conn) -> dict[str, str]:
     return snap
 
 
+# --------------------------------------------------------------------------- in-DB anchor (P27/FN-19)
+#
+# The sidecar baseline above lives OUTSIDE the DB, so deleting it forces the "no baseline -> establish
+# from current state" path to silently re-baseline whatever the DB now holds (see the trust-model note
+# in this module's docstring). P27 commits a SECOND witness inside case.db: an append-only
+# ``audit_baseline`` anchor (migration 0014). The anchor hashes the same immutable final snapshot AND the
+# ``source_query.raw_response_hash`` provenance that produced those final facts (Invariant #3) — data the
+# case commits. When the sidecar is MISSING, the check compares the recomputed anchor to the committed
+# one instead of blindly re-baselining: an intact case still matches (benign sidecar loss -> re-establish
+# and pass); a case whose final-state was rewritten no longer matches -> FAIL (tamper). The sidecar stays
+# the authority WHEN PRESENT (it distinguishes benign additions from modifications, which a single digest
+# cannot); the anchor only advances in lockstep so it tracks the same "current legitimate state".
+
+
+def _final_provenance_hashes(conn) -> list[str]:
+    """The distinct ``raw_response_hash`` values of the ``source_query`` rows that produced the FINAL
+    (immutable) facts — the provenance the case commits (Invariant #3). Anchoring the baseline to THESE
+    roots it in the ledger's ground truth, not only in the derived (rewritable) fact rows."""
+    rows = conn.execute("""
+        SELECT DISTINCT sq.raw_response_hash AS h
+        FROM source_query sq
+        WHERE sq.raw_response_hash IS NOT NULL AND sq.id IN (
+            SELECT source_query_id FROM transaction_
+              WHERE finality_status='final' AND source_query_id IS NOT NULL
+            UNION SELECT t.source_query_id FROM transfer t JOIN transaction_ x ON x.id=t.transaction_id
+              WHERE x.finality_status='final' AND t.source_query_id IS NOT NULL
+            UNION SELECT i.source_query_id FROM tx_input i JOIN transaction_ x ON x.id=i.transaction_id
+              WHERE x.finality_status='final' AND i.source_query_id IS NOT NULL
+            UNION SELECT o.source_query_id FROM tx_output o JOIN transaction_ x ON x.id=o.transaction_id
+              WHERE x.finality_status='final' AND o.source_query_id IS NOT NULL
+        )
+    """).fetchall()
+    return sorted(r["h"] for r in rows)
+
+
+def _anchor_digest(final_snapshot: dict[str, str], provenance_hashes: list[str]) -> str:
+    """SHA-256 binding the immutable final snapshot to its committed provenance. A rewrite of any final
+    row changes the snapshot; the provenance set ties it to the raw responses (Invariant #3)."""
+    payload = json.dumps({"final": final_snapshot, "provenance": provenance_hashes}, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _schema_version(conn) -> int:
+    """The DB's own recorded ``case_meta.schema_version`` (informational for the anchor row); 0 if absent."""
+    try:
+        row = conn.execute("SELECT schema_version FROM case_meta LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _sync_anchor(ctx: AuditContext, anchor_now: str, row_count: int) -> None:
+    """Advance the in-DB anchor to ``anchor_now`` iff it changed (append-only; latest wins). Called only
+    on establishing/passing paths, where the sidecar has already confirmed the change is legitimate."""
+    if read_latest_anchor(ctx.conn, FINAL_BASELINE) != anchor_now:
+        append_anchor(ctx.conn, FINAL_BASELINE, anchor_now, row_count=row_count,
+                      schema_version=_schema_version(ctx.conn),
+                      established_at=datetime.now(timezone.utc).isoformat())
+
+
 @audit_check("final-immutability")
 def check_final_immutability(ctx: AuditContext) -> AuditResult:
     current = _final_snapshot(ctx.conn)
     schema_now = _schema_fingerprint(ctx.conn, FINAL_AUDITED_TABLES)
     migs_now = _applied_migrations(ctx.conn)
+    anchor_now = _anchor_digest(current, _final_provenance_hashes(ctx.conn))  # P27: in-DB witness
     raw = ctx.baselines.read(FINAL_BASELINE)
 
     if raw is None:
+        # Sidecar missing. The in-DB anchor (P27/FN-19) is the witness that survives a deleted sidecar:
+        # if a prior anchor exists and the committed final-state no longer matches it, refuse to silently
+        # re-baseline (possible tampering) UNLESS the operator explicitly re-baselined this run.
+        stored = read_latest_anchor(ctx.conn, FINAL_BASELINE)
+        if stored is not None and stored != anchor_now and FINAL_BASELINE not in ctx.rebaselined:
+            return AuditResult(
+                "final-immutability", passed=False,
+                offending=[{"reason": "committed final-state no longer matches the in-DB audit_baseline "
+                                      "anchor", "baseline": FINAL_BASELINE}],
+                detail="the baseline sidecar is absent and the in-DB anchor does not match current "
+                       "final-state — refusing to silently re-baseline a possibly-tampered state "
+                       "(P27/FN-19). If you verified this change out-of-band, re-establish explicitly "
+                       "with `python -m backend.app.audits.runner --db <case.db> --rebaseline "
+                       "final-immutability`.")
         ctx.baselines.write(FINAL_BASELINE, _pack_baseline(current, schema_now, migs_now))
-        return AuditResult("final-immutability", passed=True,
-                           detail=f"baseline recorded ({len(current)} final rows)")
+        _sync_anchor(ctx, anchor_now, len(current))
+        if stored is None:
+            detail = f"baseline recorded ({len(current)} final rows)"
+        elif stored == anchor_now:
+            detail = f"baseline sidecar re-established from intact in-DB anchor ({len(current)} final rows)"
+        else:  # guard bypassed via --rebaseline: an operator re-baseline of a re-verified change
+            detail = f"operator re-baseline: in-DB anchor advanced to the re-verified state ({len(current)} final rows)"
+        return AuditResult("final-immutability", passed=True, detail=detail)
 
     baseline, schema_base, migs_base = _unpack_baseline(raw)
 
     verdict = _schema_change_verdict(FINAL_BASELINE, schema_base, schema_now, migs_base, migs_now)
     if verdict == "rebaseline":
         ctx.baselines.write(FINAL_BASELINE, _pack_baseline(current, schema_now, migs_now))
+        _sync_anchor(ctx, anchor_now, len(current))  # schema advance changes the snapshot -> re-anchor
         new = ", ".join(sorted(set(migs_now or []) - set(migs_base or []))) or "(unknown)"
         return AuditResult("final-immutability", passed=True,
                            detail=f"audited-table schema advanced by migration(s) {new}; baseline "
@@ -195,8 +279,10 @@ def check_final_immutability(ctx: AuditContext) -> AuditResult:
     passed = not offending
     detail = ""
     if passed:
-        # No regression — advance the baseline to include any newly-final rows.
+        # No regression — advance the sidecar (newly-final rows) AND the in-DB anchor in lockstep, so the
+        # anchor keeps tracking the current legitimate state (else a later sidecar loss would false-alarm).
         ctx.baselines.write(FINAL_BASELINE, _pack_baseline(current, schema_now, migs_now))
+        _sync_anchor(ctx, anchor_now, len(current))
     elif schema_base is None:
         detail = _LEGACY_MISMATCH_HINT.format(name=FINAL_BASELINE).strip()
     return AuditResult("final-immutability", passed=passed, offending=offending, detail=detail)

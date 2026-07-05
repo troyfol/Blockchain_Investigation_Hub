@@ -6,6 +6,7 @@ import {
   setConnectorEnabled, setKey, setOffline, statusBadge,
 } from "./settings";
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // The Settings panel (P5, Neo-Tokyo): connectors (free always-on; paid toggle + write-only key →
 // keyring), the cases folder, and offline mode. CREDENTIAL BOUNDARY: the key field is write-only — a
@@ -98,10 +99,10 @@ export default function SettingsPanel({ onClose, onCasesFolderChanged }: Props) 
   };
 
   return (
-    <div style={backdrop} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
+    <Modal onClose={onClose} backdropStyle={backdrop} labelledBy="settings-title"
+           containerStyle={{ width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h1 style={{ margin: 0, fontSize: 20, color: t("ui.text") }}>Settings</h1>
+          <h1 id="settings-title" style={{ margin: 0, fontSize: 20, color: t("ui.text") }}>Settings</h1>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose} aria-label="Close settings">✕</button>
         </div>
 
@@ -141,6 +142,13 @@ export default function SettingsPanel({ onClose, onCasesFolderChanged }: Props) 
               <p style={sectionTitle}>Connectors</p>
               <p style={hint}>Free pillars are always on (the baseline is never blocked). Paid sources are
                 side-by-side options — each needs its enable toggle AND an API key in the OS keyring.</p>
+              {/* P39 — first-run reassurance: name where data actually lives so "is this uploading my case?"
+                  is answered before the investigator pastes a key. */}
+              <p style={{ ...hint, color: t("node.annotation.ring"), lineHeight: 1.5 }}>
+                🔒 Everything stays on this machine — cases live under{" "}
+                <code style={{ color: t("ui.text.secondary") }}>{data.cases_folder}</code> and API keys in the
+                OS keyring; nothing is uploaded to us or anyone else.
+              </p>
 
               {/* Free pillars with NO key — simple always-on chips. */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -291,7 +299,6 @@ export default function SettingsPanel({ onClose, onCasesFolderChanged }: Props) 
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

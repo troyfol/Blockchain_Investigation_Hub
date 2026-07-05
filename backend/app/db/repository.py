@@ -27,10 +27,14 @@ from ..models import (
     InvestigatorLabel,
     Report,
     RiskAssessment,
+    RiskDetail,
     Tag,
     Trace,
+    TraceBridgeLink,
     TraceBtcLink,
+    TraceBtcLinkRetraction,
     TraceTransfer,
+    TraceTransferRetraction,
     Transaction,
     Transfer,
     TxInput,
@@ -441,6 +445,26 @@ def upsert_risk_assessment(conn, r: RiskAssessment, source_query_id: str | None)
     return insert_risk_assessment(conn, r, source_query_id)
 
 
+def insert_risk_detail(conn, rd: RiskDetail, source_query_id: str | None) -> str:
+    """FN-15: append one per-sub-signal risk row under its parent `risk_assessment`. Idempotent on
+    (risk_assessment_id, signal) — re-ingesting a parent's breakdown is a no-op (Invariant #7). Each
+    sub-signal is stored RAW, never collapsed/averaged (Invariant #4), with its own provenance written in
+    the parent's txn (Invariant #3 — a risk sub-signal is always sourced, never investigator-authored).
+    Returns the existing-or-new id."""
+    _require_provenance(source_query_id, "risk_detail")
+    conn.execute(
+        """INSERT INTO risk_detail (id, risk_assessment_id, signal, score, score_scale, source_query_id)
+           VALUES (?,?,?,?,?,?)
+           ON CONFLICT(risk_assessment_id, signal) DO NOTHING""",
+        (rd.id, rd.risk_assessment_id, rd.signal, rd.score, rd.score_scale, source_query_id),
+    )
+    row = conn.execute(
+        "SELECT id FROM risk_detail WHERE risk_assessment_id=? AND signal=?",
+        (rd.risk_assessment_id, rd.signal),
+    ).fetchone()
+    return row[0]
+
+
 def insert_valuation(conn, v: Valuation, source_query_id: str | None) -> str:
     _claim_provenance(source_query_id, v.source, "valuation")
     conn.execute(
@@ -565,9 +589,12 @@ def insert_trace(conn, t: Trace, now: str | None = None) -> str:
 
 def insert_trace_transfer(conn, tt: TraceTransfer) -> str:
     # LOG-07: insert-once on (trace_id, transfer_id) — re-adding the same edge to a trace is a no-op
-    # (mirrors the claim tables' idiom), so trace construction is re-run-safe.
+    # (mirrors the claim tables' idiom), so trace construction is re-run-safe. FN-04: the dedup ignores
+    # RETRACTED edges, so re-adding an edge that was retracted appends a FRESH active row (the retracted
+    # one is append-only history) instead of returning the still-retracted id — "re-add after retract works".
     existing = conn.execute(
-        "SELECT id FROM trace_transfer WHERE trace_id=? AND transfer_id=?",
+        "SELECT id FROM trace_transfer tt WHERE tt.trace_id=? AND tt.transfer_id=? "
+        "AND NOT EXISTS (SELECT 1 FROM trace_transfer_retraction r WHERE r.trace_transfer_id=tt.id)",
         (tt.trace_id, tt.transfer_id)).fetchone()
     if existing is not None:
         return existing[0]
@@ -582,9 +609,12 @@ def insert_trace_btc_link(conn, link: TraceBtcLink) -> str:
     # LOG-07: insert-once on (trace_id, transaction_id, source_output_id, dest_output_id, basis) — re-running
     # FIFO or re-adding a manual link on the same trace does not append duplicate rows (which would
     # double-count the linkage in the report/graph).
+    # FN-04: the dedup ignores RETRACTED links (as insert_trace_transfer does), so re-adding a retracted
+    # link appends a fresh active row rather than returning the still-retracted id.
     existing = conn.execute(
-        "SELECT id FROM trace_btc_link WHERE trace_id=? AND transaction_id=? "
-        "AND source_output_id=? AND dest_output_id=? AND basis=?",
+        "SELECT id FROM trace_btc_link l WHERE l.trace_id=? AND l.transaction_id=? "
+        "AND l.source_output_id=? AND l.dest_output_id=? AND l.basis=? "
+        "AND NOT EXISTS (SELECT 1 FROM trace_btc_link_retraction r WHERE r.trace_btc_link_id=l.id)",
         (link.trace_id, link.transaction_id, link.source_output_id, link.dest_output_id, link.basis),
     ).fetchone()
     if existing is not None:
@@ -598,6 +628,41 @@ def insert_trace_btc_link(conn, link: TraceBtcLink) -> str:
          link.basis, link.confidence, link.ordering, link.note),
     )
     return link.id
+
+
+def insert_trace_bridge_link(conn, link: TraceBridgeLink, now: str | None = None) -> str:
+    # FN-17: a manual cross-chain bridge crossing (Family C — no source_query_id). Each side is a poly ref
+    # to a value movement; the CHECK constraints + the no-dangling-fk audit keep the refs honest.
+    conn.execute(
+        """INSERT INTO trace_bridge_link
+             (id, trace_id, src_subject_type, src_subject_id, dst_subject_type, dst_subject_id, basis,
+              confidence, ordering, note, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (link.id, link.trace_id, link.src_subject_type, link.src_subject_id, link.dst_subject_type,
+         link.dst_subject_id, link.basis, link.confidence, link.ordering, link.note, now or utc_now_iso()),
+    )
+    return link.id
+
+
+def insert_trace_transfer_retraction(conn, r: TraceTransferRetraction, now: str | None = None) -> str:
+    # FN-04: append-only withdrawal of an EVM trace edge (the edge row is never deleted). Family C — no
+    # source_query_id (an investigator construction, like the trace itself).
+    conn.execute(
+        "INSERT INTO trace_transfer_retraction (id, trace_transfer_id, reason, source, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (r.id, r.trace_transfer_id, r.reason, r.source, now or utc_now_iso()),
+    )
+    return r.id
+
+
+def insert_trace_btc_link_retraction(conn, r: TraceBtcLinkRetraction, now: str | None = None) -> str:
+    # FN-04: append-only withdrawal of a Bitcoin trace link (mirrors insert_trace_transfer_retraction).
+    conn.execute(
+        "INSERT INTO trace_btc_link_retraction (id, trace_btc_link_id, reason, source, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (r.id, r.trace_btc_link_id, r.reason, r.source, now or utc_now_iso()),
+    )
+    return r.id
 
 
 def insert_finding(conn, f: Finding, now: str | None = None) -> str:

@@ -4,6 +4,7 @@ import {
   applyClustering, clusteringSummary, listHeuristics, previewClustering, undoClustering,
 } from "./clustering";
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // Clustering panel (P8.8). Toggle/parameterise each heuristic, PREVIEW what it would merge, APPLY it (a
 // reversible run), and UNDO any run — plus the Leiden community VISUAL overlay (structure, not ownership).
@@ -92,10 +93,9 @@ export default function ClusteringPanel({ onChanged, onClose, community, onToggl
   };
 
   return (
-    <div style={backdrop} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={card}>
+    <Modal onClose={onClose} backdropStyle={backdrop} containerStyle={card} labelledBy="clustering-title">
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h2 style={{ margin: 0, fontSize: 16, color: t("ui.text") }}>Clustering</h2>
+          <h2 id="clustering-title" style={{ margin: 0, fontSize: 16, color: t("ui.text") }}>Clustering</h2>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose} aria-label="Close">✕</button>
         </div>
         <p style={{ fontSize: 11, color: t("ui.muted"), margin: 0 }}>
@@ -170,7 +170,6 @@ export default function ClusteringPanel({ onChanged, onClose, community, onToggl
             ))}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

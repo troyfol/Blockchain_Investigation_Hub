@@ -735,6 +735,34 @@ class Launcher:
             "settings_path": str(settings_path()),
             "meipass": getattr(sys, "_MEIPASS", None),
         }
+
+        # P39 — the bundled first-run sample must import + open + read back through the FROZEN app (the
+        # one-click "Explore the sample case"). FROZEN-ONLY: in source mode cases_root is the repo cases/
+        # dir, so extracting a copy there would pollute the tree — the frozen smoke is the gate. When
+        # frozen it hard-gates ``ok`` (a build that can't open its own sample is a ship defect).
+        if is_frozen():
+            try:
+                from backend.app.services import cases as _cases
+
+                if _cases.sample_casefile_path() is None:
+                    result["sample"] = {"available": False}
+                    result["ok"] = False
+                else:
+                    imp = _cases.import_sample_case()
+                    verified = bool(imp.get("verification", {}).get("ok"))
+                    rs = httpx.get(self.url + "api/graph", timeout=8.0)
+                    gs = rs.json() if rs.status_code == 200 else {}
+                    nodes = len(gs.get("nodes", []))
+                    result["sample"] = {"available": True, "imported": bool(imp.get("opened")),
+                                        "verified": verified, "graph_status": rs.status_code,
+                                        "nodes": nodes, "edges": len(gs.get("edges", []))}
+                    if not (imp.get("opened") and verified and rs.status_code == 200 and nodes > 0):
+                        result["ok"] = False
+            except Exception as exc:
+                result["sample"] = {"error": f"{type(exc).__name__}: {exc}"}
+                result["ok"] = False
+        else:
+            result["sample"] = {"skipped": "source-mode (frozen-only probe)"}
         return result
 
     def run_check(self) -> int:

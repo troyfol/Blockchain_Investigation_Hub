@@ -5,6 +5,7 @@ import {
   resetCustomOverrides, setActivePreset, setCustomOverride, t, themeValue,
 } from "./theme";
 import catalog from "./tokens.json";
+import { colorDistance, contrastRatio } from "./colorMath";
 
 // P6 — the in-canvas theme switcher + the Customize-colors editor logic (all in theme.ts; the React
 // components are thin wrappers over these tested functions). A fake localStorage proves persistence.
@@ -146,21 +147,12 @@ describe("full token coverage + no hardcoded hex across all themes", () => {
 });
 
 describe("dark + light — legibility + semantic distinctness", () => {
-  const lum = (hex: string) => {
-    const c = hex.replace("#", "");
-    const ch = [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16) / 255)
-      .map((x) => (x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)));
-    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
-  };
-  const contrast = (a: string, b: string) => {
-    const la = lum(a), lb = lum(b);
-    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-  };
-
+  // WCAG contrast now comes from the shared DOM-free ./colorMath helper (P38/UX-13) rather than an
+  // inline copy — the same relativeLuminance→ratio the report-grey AA guard below relies on.
   it("UI + node-label text is legible on the background (WCAG contrast)", () => {
     for (const th of ["dark", "light"]) {
-      expect(contrast(themeValue("ui.text", th), themeValue("ui.app.bg", th))).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(themeValue("node.label.color", th), themeValue("canvas.background", th)))
+      expect(contrastRatio(themeValue("ui.text", th), themeValue("ui.app.bg", th))).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(themeValue("node.label.color", th), themeValue("canvas.background", th)))
         .toBeGreaterThanOrEqual(3);
     }
   });
@@ -174,6 +166,35 @@ describe("dark + light — legibility + semantic distinctness", () => {
       expect(new Set(channels).size).toBe(channels.length);
       // risk must also stay clear of the value/output edge (a flow can't read as a risk glow).
       expect(themeValue("node.risk.sanctioned.halo", th)).not.toBe(themeValue("edge.tx_output.line", th));
+    }
+  });
+});
+
+describe("report exhibit — muted/empty greys clear AA + sources stay spaced (P38/UX-13)", () => {
+  // The report/exhibit always renders print-light on a white page (report.css `body` sets no background),
+  // so its grey TEXT must clear WCAG AA (4.5:1) on white — the court-facing artifact stays legible even
+  // on a b/w printout. (Borders/backgrounds are non-text and exempt; this asserts only text greys.)
+  const PAPER = "#ffffff";
+  it("every report grey text token clears AA (4.5:1) on the white page", () => {
+    for (const id of ["report.subtext", "report.muted", "report.footer.text", "report.empty"]) {
+      const c = contrastRatio(themeValue(id, "print-light"), PAPER);
+      expect(c, `${id} contrast ${c.toFixed(2)} < AA 4.5`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // Invariant #4 — sources are shown side-by-side and never merged; their badge colors must therefore
+  // stay visibly distinct. The named near-duplicate (Chainalysis vs OFAC-SDN, both purple-ish under the
+  // Neo-Tokyo base) must be clearly apart, and no source pair may be a near-duplicate, under every theme.
+  const SOURCES = ["graphsense", "ofac-sdn", "chainalysis", "arkham", "misttrack", "default"];
+  it("adjacent source badges stay distinct in every theme (Chainalysis ≠ OFAC-SDN)", () => {
+    for (const th of THEME_KEYS) {
+      const d = colorDistance(themeValue("source.chainalysis", th), themeValue("source.ofac-sdn", th));
+      expect(d, `chainalysis vs ofac-sdn too close (${d.toFixed(0)}) in ${th}`).toBeGreaterThanOrEqual(100);
+      const cols = SOURCES.map((s) => themeValue(`source.${s}`, th));
+      for (let i = 0; i < cols.length; i++)
+        for (let j = i + 1; j < cols.length; j++)
+          expect(colorDistance(cols[i], cols[j]),
+            `${SOURCES[i]} vs ${SOURCES[j]} near-duplicate in ${th}`).toBeGreaterThanOrEqual(40);
     }
   });
 });

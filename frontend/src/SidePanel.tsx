@@ -1,6 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GraphEdge, GraphNode, NodeValue } from "./Graph";
+import { valuationState } from "./nodeValue";
 import { sourceColor, t } from "./theme/theme";
+import { fetchSourceQuery, type SourceQueryProvenance } from "./provenance";
+import {
+  addTraceAnnotation,
+  btcLinkCandidates,
+  listTraceAnnotations,
+  listTraceBridgeLinks,
+  traceNextHops,
+  type BridgeEndpoint,
+  type BtcLinkCandidate,
+  type BtcNextHop,
+  type EvmNextHop,
+  type TraceAnnotation,
+  type TraceBridgeLink,
+} from "./traces";
+
+type BridgePins = { src: BridgeEndpoint | null; dst: BridgeEndpoint | null };
 
 const fmtUsd = (v?: number | null): string | null =>
   v == null ? null : `$${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -27,14 +44,17 @@ const PANEL: React.CSSProperties = {
 type Attribution = {
   id: string; label: string; category: string | null;
   source: string; confidence: number | null; note: string | null;
+  source_query_id?: string | null;
 };
 type Risk = {
   id: string; category: string; score: number | null;
   score_scale: string | null; rationale: string | null; source: string;
+  source_query_id?: string | null;
 };
 type EntityMembership = {
   name: string; entity_type: string | null; origin: string;
   source: string; method: string; confidence: number | null; flags: string | null;
+  source_query_id?: string | null;
 };
 export type AddressClaims = {
   address_id: string;
@@ -122,11 +142,14 @@ function AnnotationItem({ a, onEdit, onDelete }: {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2, gap: 6 }}>
         <span style={{ color: t("ui.muted"), fontSize: em(10) }}>{a.created_at}</span>
         {(onEdit || onDelete) && (
-          <span style={{ whiteSpace: "nowrap", fontSize: em(10) }}>
-            {onEdit && <span style={{ cursor: "pointer", color: t("node.label.color") }}
+          // P38/UX-13 — edit/delete are ≥24px tap targets (inline-flex box + padding), not bare 10px glyphs.
+          <span style={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", fontSize: em(10) }}>
+            {onEdit && <span style={{ display: "inline-flex", alignItems: "center", minHeight: 24,
+              padding: "0 6px", cursor: "pointer", color: t("node.label.color") }}
               onClick={() => { setText(a.content); setEditing(true); }}>edit</span>}
-            {onEdit && onDelete && <span style={{ color: t("ui.muted") }}> · </span>}
-            {onDelete && <span style={{ cursor: "pointer", color: t("ui.error") }}
+            {onEdit && onDelete && <span style={{ color: t("ui.muted") }}>·</span>}
+            {onDelete && <span style={{ display: "inline-flex", alignItems: "center", minHeight: 24,
+              padding: "0 6px", cursor: "pointer", color: t("ui.error") }}
               onClick={() => onDelete(a.id)}>delete</span>}
           </span>
         )}
@@ -165,6 +188,10 @@ function AnnotationsSection({ target, annotations, onAdd, onEdit, onDelete }: {
 // no "now" figure (never fabricated) — only value-at-time is shown.
 function ValueHeader({ val }: { val: NodeValue }) {
   const sym = val.native_symbol ?? "";
+  // P30/UX-09 — a node with native movement but NO USD on either side is ingested-but-UNVALUED (value-at-time
+  // pending or unavailable), which is NOT $0 (unpriced ≠ zero). State that honestly instead of silently
+  // omitting the USD; a valued node keeps the value-at-time note unchanged.
+  const unvalued = valuationState(val) === "unvalued";
   const row = (lbl: string, nat?: number | null, usd?: number | null) =>
     (nat != null || usd != null) ? (
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -178,7 +205,13 @@ function ValueHeader({ val }: { val: NodeValue }) {
     <div style={{ background: t("ui.panel.elevated"), borderRadius: 3, padding: "6px 8px", marginBottom: 8 }}>
       {row("received", val.in_native, val.in_usd)}
       {row("sent", val.out_native, val.out_usd)}
-      <div style={{ color: t("ui.muted"), fontSize: em(10), marginTop: 3 }}>USD = value-at-time (DeFiLlama).</div>
+      {unvalued ? (
+        <div style={{ color: t("ui.muted"), fontSize: em(10), marginTop: 3 }}>
+          No USD valuation yet (value-at-time pending or unavailable).
+        </div>
+      ) : (
+        <div style={{ color: t("ui.muted"), fontSize: em(10), marginTop: 3 }}>USD = value-at-time (DeFiLlama).</div>
+      )}
     </div>
   );
 }
@@ -223,11 +256,22 @@ function RankedList({ summary, onFocus }: { summary: NodeSummary; onFocus?: (id:
 
 // An inline "✎ Rename" control: an investigator label edit, saved on Enter / Save. Used for a node's
 // custom label, a flow/edge's name, and a trace/path's name (the universal rename — feature A3).
-function LabelEditor({ initial, placeholder, onSave }: {
-  initial: string; placeholder: string; onSave: (value: string) => void;
+function LabelEditor({ initial, placeholder, onSave, openToken }: {
+  initial: string; placeholder: string; onSave: (value: string) => void; openToken?: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(initial);
+  // P32 — a double-click on the node bumps `openToken`, opening this editor (reset to the current label) so
+  // rename starts inline with no native prompt. We react only to a CHANGE in openToken (a ref seeded with the
+  // mount value), so merely SELECTING a node — which mounts the editor while openToken is already non-zero
+  // from an earlier rename — never auto-opens it; only a fresh double-click does.
+  const seenToken = useRef(openToken);
+  useEffect(() => {
+    if (openToken === seenToken.current) return;
+    seenToken.current = openToken;
+    if (openToken) { setValue(initial); setEditing(true); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openToken]);
   const btn: React.CSSProperties = {
     background: t("ui.panel.elevated"), color: t("ui.text"), border: `1px solid ${t("ui.border")}`,
     borderRadius: 3, padding: "2px 8px", fontSize: em(11), cursor: "pointer",
@@ -256,18 +300,19 @@ function LabelEditor({ initial, placeholder, onSave }: {
 // The universal Rename + Annotations block — rendered for EVERY durable target (address, transaction,
 // flow), so renaming + annotating works the same way for a node and a flow (feature A3).
 function RenameAndNotes({ target, currentLabel, isCustom, annotations, onSaveLabel, onAddAnnotation,
-                         onEditAnnotation, onDeleteAnnotation }: {
+                         onEditAnnotation, onDeleteAnnotation, openRenameToken }: {
   target: Target; currentLabel: string; isCustom: boolean; annotations: Annotation[];
   onSaveLabel?: (ttype: string, tid: string, label: string) => void;
   onAddAnnotation?: (ttype: string, tid: string, content: string) => void;
   onEditAnnotation?: (id: string, content: string) => void | Promise<unknown>;
   onDeleteAnnotation?: (id: string) => void;
+  openRenameToken?: number;
 }) {
   return (
     <>
       {onSaveLabel && (
         <div style={{ marginBottom: 8 }}>
-          <LabelEditor initial={currentLabel} placeholder="custom label"
+          <LabelEditor initial={currentLabel} placeholder="custom label" openToken={openRenameToken}
             onSave={(v) => onSaveLabel(target.ttype, target.tid, v)} />
           {isCustom && (
             <div style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 2 }}>
@@ -288,21 +333,251 @@ function RenameAndNotes({ target, currentLabel, isCustom, annotations, onSaveLab
 // a Bitcoin transaction into `basis='fifo'` links (a labeled convention, never ground-truth flow).
 type TraceAction = { type: "transfer" | "fifo"; id: string; label: string };
 
-// Build + populate traces (LOG-04). Create a named trace, then add the selected EVM transfer, or
-// FIFO-apportion the selected Bitcoin transaction. The writers are insert-once (re-running is safe).
-function TraceBuilder({ traces, action, onCreateTrace, onAddTransferToTrace, onFifoTx }: {
+type ManualLink = { transaction_id: string; source_output_id: string; dest_output_id: string; note: string | null };
+
+const traceField = (): React.CSSProperties => ({
+  background: t("ui.panel.elevated"), color: t("ui.text"), border: `1px solid ${t("ui.border")}`,
+  borderRadius: 3, padding: "3px 6px", fontSize: em(12),
+});
+
+// Durable investigator NOTES on a trace/path (UX-06). A `trace` is a valid annotation target, so this
+// reuses the generic notes endpoint. Self-contained: it fetches + posts the trace's OWN notes, so it never
+// disturbs the selected node/flow's annotation state. These notes also appear in the report's notes appendix.
+function TraceNotes({ traceId }: { traceId: string }) {
+  const [notes, setNotes] = useState<TraceAnnotation[]>([]);
+  const [text, setText] = useState("");
+  useEffect(() => {
+    if (!traceId) { setNotes([]); return; }
+    let live = true;
+    listTraceAnnotations(traceId).then((d) => { if (live) setNotes(d.annotations ?? []); }).catch(() => { /* leave empty */ });
+    return () => { live = false; };
+  }, [traceId]);
+  const add = () => {
+    const v = text.trim();
+    if (!v) return;
+    addTraceAnnotation(traceId, v).then((d) => { setNotes(d.annotations ?? []); setText(""); }).catch(() => { /* ignore */ });
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>Notes on this trace</div>
+      {notes.map((n) => (
+        <div key={n.id} style={{ fontSize: em(11), color: t("ui.text"),
+          borderLeft: `3px solid ${t("node.annotation.ring")}`, padding: "3px 6px", marginBottom: 3 }}>
+          {n.content}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 4 }}>
+        <input value={text} placeholder="note on this trace…" onChange={(e) => setText(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter") add(); }} style={{ ...traceField(), flex: 1, minWidth: 0 }} />
+        <button onClick={add} style={{ ...traceField(), cursor: "pointer" }}>Note</button>
+      </div>
+    </div>
+  );
+}
+
+// A manual `basis='investigator'` BTC link WITHIN one transaction (UX-06). The pickers are the tx's legal
+// endpoints ONLY (sources = prev-outputs it spends, dests = its own outputs), so the UI cannot even express
+// a cross-tx edge; the backend re-validates on write (Invariant #5 — the link is a within-tx claim).
+function ManualLinkForm({ txId, traceId, onAddManualLink }: {
+  txId: string; traceId: string; onAddManualLink: (traceId: string, link: ManualLink) => void;
+}) {
+  const [sources, setSources] = useState<BtcLinkCandidate[]>([]);
+  const [dests, setDests] = useState<BtcLinkCandidate[]>([]);
+  const [src, setSrc] = useState("");
+  const [dst, setDst] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    let live = true;
+    btcLinkCandidates(txId).then((d) => {
+      if (!live) return;
+      setSources(d.sources); setDests(d.dests);
+      setSrc(d.sources[0]?.id ?? ""); setDst(d.dests[0]?.id ?? "");
+    }).catch(() => { if (live) { setSources([]); setDests([]); } });
+    return () => { live = false; };
+  }, [txId]);
+  const canLink = Boolean(traceId && src && dst);
+  const link = () => {
+    if (!canLink) return;
+    onAddManualLink(traceId, { transaction_id: txId, source_output_id: src, dest_output_id: dst, note: note.trim() || null });
+    setNote("");
+  };
+  if (sources.length === 0 || dests.length === 0) {
+    return (
+      <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 8 }}>
+        No in-DB spent-output → output pair to link within this tx.
+      </p>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
+        Manual link (within this tx — an investigator claim, not flow)
+      </div>
+      <select value={src} onChange={(e) => setSrc(e.target.value)} style={{ ...traceField(), width: "100%", cursor: "pointer" }}>
+        {sources.map((s) => <option key={s.id} value={s.id}>from: {s.label}</option>)}
+      </select>
+      <select value={dst} onChange={(e) => setDst(e.target.value)} style={{ ...traceField(), width: "100%", marginTop: 3, cursor: "pointer" }}>
+        {dests.map((d) => <option key={d.id} value={d.id}>to: {d.label}</option>)}
+      </select>
+      <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+        <input value={note} placeholder="note (optional)…" onChange={(e) => setNote(e.target.value)}
+               style={{ ...traceField(), flex: 1, minWidth: 0 }} />
+        <button onClick={link} disabled={!canLink}
+                style={{ ...traceField(), cursor: canLink ? "pointer" : "default", opacity: canLink ? 1 : 0.5 }}>
+          Link
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Guided expansion (FN-16): the trace's PROPOSED next hops — outgoing facts already in the case that leave
+// its frontier (terminal nodes). The tool PROPOSES; the investigator adds (nothing is auto-added). EVM = a
+// one-click transfer add; BTC = focus the tx that spends the terminal output so the within-tx link form
+// opens. `refreshKey` re-fetches after a hop is added (the frontier advances). Self-contained fetch.
+function NextHops({ traceId, refreshKey, onAddTransferToTrace, onFocus }: {
+  traceId: string; refreshKey: number;
+  onAddTransferToTrace: (traceId: string, transferId: string) => void;
+  onFocus?: (nodeId: string) => void;
+}) {
+  const [evm, setEvm] = useState<EvmNextHop[]>([]);
+  const [btc, setBtc] = useState<BtcNextHop[]>([]);
+  useEffect(() => {
+    if (!traceId) { setEvm([]); setBtc([]); return; }
+    let live = true;
+    traceNextHops(traceId).then((d) => { if (live) { setEvm(d.evm ?? []); setBtc(d.btc ?? []); } })
+      .catch(() => { if (live) { setEvm([]); setBtc([]); } });
+    return () => { live = false; };
+  }, [traceId, refreshKey]);
+  if (evm.length === 0 && btc.length === 0) return null;
+  const short = (a: string | null): string => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "?");
+  const rowStyle: React.CSSProperties = { display: "flex", gap: 4, alignItems: "center", marginBottom: 3 };
+  const textStyle: React.CSSProperties = { flex: 1, minWidth: 0, fontSize: em(11), color: t("ui.text"),
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
+        Next hops (proposed — you choose; nothing is auto-added)
+      </div>
+      {evm.map((h) => (
+        <div key={h.transfer_id} style={rowStyle}>
+          <span style={textStyle}>{short(h.from)} → {short(h.to)} · {h.amount} {h.asset ?? ""}</span>
+          <button onClick={() => onAddTransferToTrace(traceId, h.transfer_id)} style={{ ...traceField(), cursor: "pointer" }}>Add</button>
+        </div>
+      ))}
+      {btc.map((h) => (
+        <div key={h.source_output_id} style={rowStyle}>
+          <span style={textStyle}>{h.source_label} → spent by {short(h.tx_hash)}</span>
+          <button onClick={() => onFocus?.(`tx:${h.spending_tx_id}`)} disabled={!onFocus}
+                  style={{ ...traceField(), cursor: onFocus ? "pointer" : "default", opacity: onFocus ? 1 : 0.5 }}>Link…</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// FN-17: assert a CROSS-CHAIN bridge crossing — pin one selected flow as the source (chain A outflow) and
+// another as the dest (chain B inflow), then create the link (a `basis='investigator'` CLAIM, never a
+// fabricated fact). The backend requires the two movements exist and cross chains.
+function BridgeControls({ traceId, currentMovement, pins, onPin, onClear, onCreate, onCreated }: {
+  traceId: string; currentMovement: BridgeEndpoint | null; pins: BridgePins;
+  onPin: (side: "src" | "dst", ep: BridgeEndpoint) => void;
+  onClear: () => void;
+  onCreate: (traceId: string) => Promise<unknown>;
+  onCreated: () => void;
+}) {
+  const { src, dst } = pins;
+  const crossChain = Boolean(src && dst && src.chain !== dst.chain);
+  const canCreate = Boolean(traceId && crossChain);
+  const btn = (extra: React.CSSProperties = {}): React.CSSProperties => ({ ...traceField(), cursor: "pointer", ...extra });
+  const slot = (label: string, ep: BridgeEndpoint | null) => (
+    <div style={{ fontSize: em(11), color: ep ? t("ui.text") : t("ui.muted"),
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      {label}: {ep ? `${ep.chain} · ${ep.label}` : "—"}
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
+        Cross-chain bridge link (investigator claim)
+      </div>
+      {currentMovement ? (
+        <div style={{ display: "flex", gap: 4, marginBottom: 3 }}>
+          <button onClick={() => onPin("src", currentMovement)} style={btn({ flex: 1 })}>Pin as source</button>
+          <button onClick={() => onPin("dst", currentMovement)} style={btn({ flex: 1 })}>Pin as dest</button>
+        </div>
+      ) : (
+        <p style={{ color: t("ui.muted"), fontSize: em(11) }}>Select a flow (EVM transfer / BTC output), then pin it.</p>
+      )}
+      {slot("from", src)}
+      {slot("to", dst)}
+      {src && dst && !crossChain && (
+        <div style={{ fontSize: em(11), color: t("ui.muted") }}>both movements are on the same chain — a bridge must cross chains</div>
+      )}
+      <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+        <button onClick={() => { void onCreate(traceId).then(onCreated); }} disabled={!canCreate}
+                style={{ ...btn({ flex: 1 }), cursor: canCreate ? "pointer" : "default", opacity: canCreate ? 1 : 0.5 }}>
+          Create bridge link
+        </button>
+        <button onClick={onClear} disabled={!src && !dst}
+                style={{ ...btn(), cursor: (src || dst) ? "pointer" : "default", opacity: (src || dst) ? 1 : 0.5 }}>Clear</button>
+      </div>
+    </div>
+  );
+}
+
+// The trace's existing cross-chain bridge links (labeled investigator claims). Self-contained fetch;
+// `refreshKey` re-fetches after a new link is created.
+function BridgeLinksList({ traceId, refreshKey }: { traceId: string; refreshKey: number }) {
+  const [links, setLinks] = useState<TraceBridgeLink[]>([]);
+  useEffect(() => {
+    if (!traceId) { setLinks([]); return; }
+    let live = true;
+    listTraceBridgeLinks(traceId).then((d) => { if (live) setLinks(d.bridge_links ?? []); })
+      .catch(() => { if (live) setLinks([]); });
+    return () => { live = false; };
+  }, [traceId, refreshKey]);
+  if (links.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      {links.map((l) => (
+        <div key={l.id} style={{ fontSize: em(11), color: t("ui.text"),
+          borderLeft: `3px solid ${t("edge.trace.fifo.line")}`, padding: "3px 6px", marginBottom: 3 }}>
+          {l.src_chain ?? "?"} → {l.dst_chain ?? "?"} · <span style={{ color: t("ui.muted") }}>{l.basis}</span>
+          {l.note ? ` · ${l.note}` : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Build + populate traces (LOG-04). Create a named trace; add the selected EVM transfer, FIFO-apportion the
+// selected Bitcoin tx, or add a manual within-tx BTC link (UX-06). Guided expansion (FN-16) proposes next
+// hops from the frontier; a cross-chain bridge link (FN-17) is a labeled investigator claim. Any trace can
+// carry durable notes. The writers are insert-once (re-running is safe).
+function TraceBuilder({ traces, action, onCreateTrace, onAddTransferToTrace, onFifoTx, onAddManualLink,
+                        onFocus, currentMovement = null, bridgePins, onPinBridge, onClearBridge,
+                        onCreateBridge }: {
   traces: TraceInfo[]; action: TraceAction | null;
   onCreateTrace: (name: string) => void;
   onAddTransferToTrace: (traceId: string, transferId: string) => void;
   onFifoTx: (traceId: string, txId: string) => void;
+  onAddManualLink?: (traceId: string, link: ManualLink) => void;
+  onFocus?: (nodeId: string) => void;
+  currentMovement?: BridgeEndpoint | null;
+  bridgePins?: BridgePins;
+  onPinBridge?: (side: "src" | "dst", ep: BridgeEndpoint) => void;
+  onClearBridge?: () => void;
+  onCreateBridge?: (traceId: string) => Promise<unknown>;
 }) {
+  const [bridgeRefresh, setBridgeRefresh] = useState(0);
   const [name, setName] = useState("");
   const [traceId, setTraceId] = useState(traces[0]?.id ?? "");
   useEffect(() => {  // keep the picked trace valid as the list changes
     if (!traces.some((tr) => tr.id === traceId)) setTraceId(traces[0]?.id ?? "");
   }, [traces, traceId]);
-  const field: React.CSSProperties = { background: t("ui.panel.elevated"), color: t("ui.text"),
-    border: `1px solid ${t("ui.border")}`, borderRadius: 3, padding: "3px 6px", fontSize: em(12) };
+  const selected = traces.find((tr) => tr.id === traceId);
+  const hopsKey = selected ? selected.transfer_count + selected.btc_link_count : 0;  // advances on each add
   const create = () => { const v = name.trim(); if (v) { onCreateTrace(v); setName(""); } };
   const apply = () => {
     if (!traceId || !action) return;
@@ -314,34 +589,47 @@ function TraceBuilder({ traces, action, onCreateTrace, onAddTransferToTrace, onF
       <SectionHeader title="Build a trace" />
       <div style={{ display: "flex", gap: 4 }}>
         <input value={name} placeholder="new trace name…" onChange={(e) => setName(e.target.value)}
-               onKeyDown={(e) => { if (e.key === "Enter") create(); }} style={{ ...field, flex: 1, minWidth: 0 }} />
-        <button onClick={create} style={{ ...field, cursor: "pointer" }}>+ New</button>
+               onKeyDown={(e) => { if (e.key === "Enter") create(); }} style={{ ...traceField(), flex: 1, minWidth: 0 }} />
+        <button onClick={create} style={{ ...traceField(), cursor: "pointer" }}>+ New</button>
       </div>
-      {action ? (
-        traces.length === 0 ? (
-          <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
-            Create a trace above, then add the selected {action.type === "fifo" ? "transaction" : "transfer"} to it.
-          </p>
-        ) : (
-          <div style={{ marginTop: 6 }}>
-            <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
-              {action.type === "fifo" ? "FIFO-apportion " : "Add "}{action.label}
-            </div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <select value={traceId} onChange={(e) => setTraceId(e.target.value)}
-                      style={{ ...field, flex: 1, minWidth: 0, cursor: "pointer" }}>
-                {traces.map((tr) => <option key={tr.id} value={tr.id}>{tr.name}</option>)}
-              </select>
-              <button onClick={apply} style={{ ...field, cursor: "pointer" }}>
+      {traces.length === 0 ? (
+        <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
+          Create a trace above to add flows, FIFO/manual BTC links, and notes to it.
+        </p>
+      ) : (
+        <div style={{ marginTop: 6 }}>
+          <select value={traceId} onChange={(e) => setTraceId(e.target.value)}
+                  style={{ ...traceField(), width: "100%", cursor: "pointer" }}>
+            {traces.map((tr) => <option key={tr.id} value={tr.id}>{tr.name}</option>)}
+          </select>
+          {action && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ color: t("ui.muted"), fontSize: em(11), marginBottom: 3 }}>
+                {action.type === "fifo" ? "FIFO-apportion " : "Add "}{action.label}
+              </div>
+              <button onClick={apply} style={{ ...traceField(), cursor: "pointer" }}>
                 {action.type === "fifo" ? "Apportion" : "Add"}
               </button>
             </div>
-          </div>
-        )
-      ) : (
-        <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
-          Select an EVM transfer flow, or a Bitcoin transaction node, to add it to a trace.
-        </p>
+          )}
+          {action?.type === "fifo" && onAddManualLink && (
+            <ManualLinkForm txId={action.id} traceId={traceId} onAddManualLink={onAddManualLink} />
+          )}
+          {!action && (
+            <p style={{ color: t("ui.muted"), fontSize: em(11), marginTop: 6 }}>
+              Select an EVM transfer flow, or a Bitcoin tx node, to add it — or FIFO/manual-link a BTC tx.
+            </p>
+          )}
+          <NextHops traceId={traceId} refreshKey={hopsKey} onAddTransferToTrace={onAddTransferToTrace}
+                    onFocus={onFocus} />
+          {bridgePins && onPinBridge && onClearBridge && onCreateBridge && (
+            <BridgeControls traceId={traceId} currentMovement={currentMovement} pins={bridgePins}
+              onPin={onPinBridge} onClear={onClearBridge} onCreate={onCreateBridge}
+              onCreated={() => setBridgeRefresh((x) => x + 1)} />
+          )}
+          <BridgeLinksList traceId={traceId} refreshKey={bridgeRefresh} />
+          <TraceNotes traceId={traceId} />
+        </div>
       )}
     </>
   );
@@ -413,8 +701,115 @@ function ClaimCard({ source, children }: { source: string; children: React.React
   );
 }
 
+// A one-click "provenance" affordance on a claim card: lazily fetch + reveal the exact `source_query`
+// behind the claim (FN-01). Today provenance stops at the source NAME; this exposes the query itself —
+// endpoint, params/bounds, retrieval time, raw-response hash — without leaving the panel (Invariant #3).
+function ProvenanceLink({ sqid }: { sqid?: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [sq, setSq] = useState<SourceQueryProvenance | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  if (!sqid) return null;
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !sq && !err) {
+      fetchSourceQuery(sqid).then(setSq).catch((e) => setErr(String(e?.message ?? e)));
+    }
+  };
+  const kv = (k: string, v?: string | null) =>
+    v ? (
+      <div style={{ display: "flex", gap: 6 }}>
+        <span style={{ color: t("ui.muted"), minWidth: 62, flexShrink: 0 }}>{k}</span>
+        <span style={{ wordBreak: "break-all" }}>{v}</span>
+      </div>
+    ) : null;
+  return (
+    <div style={{ marginTop: 3 }}>
+      <span onClick={toggle} style={{ cursor: "pointer", color: t("node.label.color"), fontSize: em(10) }}>
+        {open ? "▾ provenance" : "▸ provenance"}
+      </span>
+      {open && (
+        <div style={{ marginTop: 3, padding: "4px 6px", background: t("ui.panel.bg"),
+                      border: `1px solid ${t("ui.border")}`, borderRadius: 3, fontSize: em(10) }}>
+          {err ? <div style={{ color: t("ui.error") }}>{err}</div>
+            : !sq ? <div style={{ color: t("ui.muted") }}>loading…</div>
+            : (
+              <>
+                {kv("source", `${sq.connector} · ${sq.capability}`)}
+                {kv("endpoint", sq.endpoint)}
+                {kv("params", sq.params ? JSON.stringify(sq.params) : null)}
+                {kv("retrieved", sq.requested_at)}
+                {kv("status", sq.status)}
+                {kv("summary", sq.result_summary)}
+                {kv("hash", sq.raw_response_hash)}
+              </>
+            )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function pct(c: number | null): string | null {
   return c == null ? null : `${Math.round(c * 100)}% confidence`;
+}
+
+// FN-03 — a movement's valuations, one card per source, side-by-side (never averaged — Invariant #4).
+// Lazily fetched for a CONTESTED flow; each card carries the raw-response provenance drill-through (FN-01).
+type ValuationClaim = {
+  source: string; currency?: string; unit_price?: string; value?: string;
+  price_timestamp?: string; confidence?: number | null; retrieved_at?: string;
+  source_query_id?: string | null;
+};
+type MovementValuations = {
+  subject_id: string; contested: boolean;
+  valuations_by_source: Record<string, ValuationClaim[]>;
+};
+
+// A Decimal-TEXT value (e.g. "2000.000…") → a readable USD string, reusing the numeric fmtUsd above.
+function usdFromText(v?: string): string {
+  if (!v) return "—";
+  const n = Number(v);
+  return isFinite(n) ? (fmtUsd(n) ?? "—") : `$${v}`;
+}
+
+function ValuationBreakdown({ subjectId }: { subjectId: string }) {
+  const [data, setData] = useState<MovementValuations | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setData(null); setErr(null);
+    fetch(`/api/movement/${encodeURIComponent(subjectId)}/valuations`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(setData).catch((e) => setErr(String(e?.message ?? e)));
+  }, [subjectId]);
+  const sources = data ? Object.keys(data.valuations_by_source) : [];
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(11), textTransform: "uppercase" }}>
+        value-at-time{sources.length ? ` · ${sources.length} sources` : ""}
+      </div>
+      {err && <div style={{ color: t("ui.error"), fontSize: em(11) }}>{err}</div>}
+      {!data && !err && <div style={{ color: t("ui.muted"), fontSize: em(11) }}>loading…</div>}
+      {data && sources.map((src) =>
+        data.valuations_by_source[src].map((v, i) => (
+          <ClaimCard key={`${src}:${i}`} source={src}>
+            <div style={{ fontSize: em(13) }}>
+              {usdFromText(v.value)} <span style={{ color: t("ui.muted"), fontSize: em(10) }}>{v.currency ?? "USD"}</span>
+            </div>
+            <div style={{ color: t("ui.muted"), fontSize: em(11) }}>
+              {v.unit_price ? `unit ${usdFromText(v.unit_price)}` : null}
+              {v.confidence != null ? `${v.unit_price ? " · " : ""}${Math.round(v.confidence * 100)}% confidence` : null}
+            </div>
+            {v.retrieved_at && <div style={{ color: t("ui.muted"), fontSize: em(10) }}>retrieved {v.retrieved_at}</div>}
+            <ProvenanceLink sqid={v.source_query_id} />
+          </ClaimCard>
+        )),
+      )}
+      <div style={{ color: t("ui.muted"), fontSize: em(10) }}>
+        Each source's price is shown side-by-side and never averaged (Invariant #4).
+      </div>
+    </div>
+  );
 }
 
 // --- the FLOW / edge inspector: a tapped edge's facts + universal rename / annotate -----------
@@ -469,15 +864,17 @@ function EdgeView({ edge, nodesById, target, annotations, onSaveLabel, onAddAnno
         </div>
       )}
       <Row k="value" v={edge.value_label} />
-      {edge.value_usd_label && (
+      {edge.value_contested && edge.ann_id ? (
+        // FN-03 — a contested movement shows EVERY source's valuation side-by-side (never one collapsed
+        // number); the flag still fires, but the detail is now rendered here rather than deferred.
+        <ValuationBreakdown subjectId={edge.ann_id} />
+      ) : edge.value_usd_label ? (
         <div style={{ marginBottom: 8 }}>
           <div style={{ color: t("ui.muted"), fontSize: em(11), textTransform: "uppercase" }}>value-at-time</div>
-          <div>{edge.value_usd_label}
-            {edge.value_contested && <span style={{ color: t("ui.muted"), fontSize: em(11) }}> · multiple sources priced this (see node detail)</span>}
-          </div>
+          <div>{edge.value_usd_label}</div>
           <div style={{ color: t("ui.muted"), fontSize: em(10) }}>USD = value-at-time (DeFiLlama).</div>
         </div>
-      )}
+      ) : null}
       {edge.no_price && (
         <div style={{ marginBottom: 8, color: t("ui.muted"), fontSize: em(11) }}>
           No USD price for this movement — shown as a gap, never a fabricated $0.
@@ -503,7 +900,8 @@ function EdgeView({ edge, nodesById, target, annotations, onSaveLabel, onAddAnno
 export default function SidePanel({ node, edge = null, claims, summary, traces = [], annotations = [],
                                     nodesById = {}, onAddAnnotation, onEditAnnotation, onDeleteAnnotation,
                                     onSaveLabel, onSaveTraceLabel, onCreateTrace, onAddTransferToTrace,
-                                    onFifoTx, onFocus, fontScale = 1 }: {
+                                    onFifoTx, onAddManualLink, bridgePins, onPinBridge, onClearBridge,
+                                    onCreateBridge, onFocus, fontScale = 1, renameToken }: {
   node: GraphNode | null;
   edge?: GraphEdge | null;
   claims: AddressClaims | null;
@@ -519,11 +917,28 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
   onCreateTrace?: (name: string) => void;
   onAddTransferToTrace?: (traceId: string, transferId: string) => void;
   onFifoTx?: (traceId: string, txId: string) => void;
+  onAddManualLink?: (traceId: string, link: ManualLink) => void;
+  bridgePins?: BridgePins;
+  onPinBridge?: (side: "src" | "dst", ep: BridgeEndpoint) => void;
+  onClearBridge?: () => void;
+  onCreateBridge?: (traceId: string) => Promise<unknown>;
   onFocus?: (nodeId: string) => void;
   fontScale?: number;
+  renameToken?: number;
 }) {
   // One root font-size drives the whole panel; the UI pref scales it (children use em — feature 6).
   const panelStyle: React.CSSProperties = { ...PANEL, fontSize: BASE_PX * fontScale };
+
+  // FN-17: the currently-selected FLOW as a pinnable bridge endpoint (a value movement + its chain). Only a
+  // flow edge with a durable movement target (transfer / tx_output) can be one side of a bridge crossing.
+  // The chain is derived from the edge's endpoint node (display + the same-chain hint only — the backend
+  // re-validates the crossing from the actual movements).
+  const currentMovement: BridgeEndpoint | null =
+    edge && edge.ann_type && edge.ann_id
+      ? { subject_type: edge.ann_type, subject_id: edge.ann_id,
+          chain: nodesById[edge.source]?.chain ?? nodesById[edge.target]?.chain ?? "?",
+          label: edge.value_label ? `${edge.ann_type} (${edge.value_label})` : edge.ann_type }
+      : null;
 
   // What the current selection offers a trace: an EVM transfer FACT (a flow with a durable transfer
   // target), or a Bitcoin transaction to FIFO-apportion. Nothing else is addable.
@@ -540,7 +955,9 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
       {traces.length > 0 && onSaveTraceLabel && <TraceList traces={traces} onSaveTraceLabel={onSaveTraceLabel} />}
       {onCreateTrace && onAddTransferToTrace && onFifoTx && (
         <TraceBuilder traces={traces} action={traceAction} onCreateTrace={onCreateTrace}
-          onAddTransferToTrace={onAddTransferToTrace} onFifoTx={onFifoTx} />
+          onAddTransferToTrace={onAddTransferToTrace} onFifoTx={onFifoTx} onAddManualLink={onAddManualLink}
+          currentMovement={currentMovement} bridgePins={bridgePins} onPinBridge={onPinBridge}
+          onClearBridge={onClearBridge} onCreateBridge={onCreateBridge} onFocus={onFocus} />
       )}
     </>
   );
@@ -602,7 +1019,8 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
       {target && (
         <RenameAndNotes target={target} currentLabel={node.label ?? ""} isCustom={!!node.custom_label}
           annotations={annotations} onSaveLabel={onSaveLabel} onAddAnnotation={onAddAnnotation}
-          onEditAnnotation={onEditAnnotation} onDeleteAnnotation={onDeleteAnnotation} />
+          onEditAnnotation={onEditAnnotation} onDeleteAnnotation={onDeleteAnnotation}
+          openRenameToken={renameToken} />
       )}
 
       {node.kind === "address" && (
@@ -621,6 +1039,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
                     {e.flags && (
                       <div style={{ color: t("node.flag.coinjoin.ring"), fontSize: em(11), marginTop: 2 }}>⚑ {e.flags}</div>
                     )}
+                    <ProvenanceLink sqid={e.source_query_id} />
                   </ClaimCard>
                 ))}
               </>
@@ -641,6 +1060,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
                           {a.note}
                         </div>
                       )}
+                      <ProvenanceLink sqid={a.source_query_id} />
                     </ClaimCard>
                   ))
                 )}
@@ -664,6 +1084,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
                       {r.rationale && (
                         <div style={{ color: t("ui.text.secondary"), fontSize: em(12), marginTop: 2 }}>{r.rationale}</div>
                       )}
+                      <ProvenanceLink sqid={r.source_query_id} />
                     </ClaimCard>
                   ))
                 )}

@@ -3,7 +3,9 @@
 A case folder is self-contained: ``case.db`` plus the provenance/exhibit/report files it references
 by RELATIVE path (``raw_responses/``, ``exhibits/``, ``reports/``) and the audit baseline sidecar
 (``.audit_baselines/`` — tamper-evidence that must travel with the case). Export computes a SHA-256
-``manifest.json`` over every such file and zips the folder to ``<case>.casefile``.
+``manifest.json`` over every such file and zips the folder to ``<case>.casefile``. The final-immutability
+baseline ALSO rides INSIDE ``case.db`` as an append-only ``audit_baseline`` anchor (P27/FN-19) — it is
+hashed as part of ``case.db`` in the manifest, so it travels and is tamper-evident with everything else.
 
 Re-open verification (Invariants: self-contained, cache-never-a-runtime-dependency, tamper-evident):
 1. every manifest file is present and its hash matches; no unlisted file slipped in;
@@ -246,6 +248,7 @@ def verify_manifest(root_dir) -> dict:
 
 def _verify_db_self_contained(case_db: Path) -> dict:
     """Open the case DB and confirm it stands alone (no cache dep; provenance resolves in-bundle)."""
+    from ..audits.baselines import anchor_present
     from ..audits.runner import run_audits
     from ..db import get_connection
 
@@ -254,6 +257,10 @@ def _verify_db_self_contained(case_db: Path) -> dict:
         attached = [name for _seq, name, _file in conn.execute("PRAGMA database_list").fetchall()
                     if name != "main"]
         fk_violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        # P27/FN-19: confirm the in-DB final-immutability anchor rode along in case.db. Informational
+        # (a pre-P27 bundle legitimately has none) — it does NOT gate `ok`; the audit re-run below is
+        # what proves tamper-evidence. Lets the import UI tell an anchored case from an older one.
+        final_anchor_present = anchor_present(conn, "final-immutability")
         # Collect every file the DB references. A NULL ref is legitimate: locally-computed
         # source_queries (co-spend clustering, valuation, FIFO, same-address) have no external raw
         # response — provenance is the source_query row itself, not a stored payload (Invariant #3).
@@ -284,6 +291,8 @@ def _verify_db_self_contained(case_db: Path) -> dict:
         # The specific failing audit(s) — lets the import UI distinguish + NAME an authentic-but-drifted
         # case's invariant warnings (e.g. a post-finality 'final-immutability' drift) from real tampering.
         "failed_audits": failed_audits,
+        # Whether the in-DB append-only final-immutability anchor (P27/FN-19) traveled in this bundle.
+        "final_anchor_present": final_anchor_present,
     }
 
 

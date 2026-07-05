@@ -39,6 +39,17 @@ class RiskAssessment(BaseModel):
     retrieved_at: str
 
 
+class RiskDetail(BaseModel):
+    """FN-15: one per-sub-signal row of a `RiskAssessment` breakdown (e.g. mixer/hacker/sanctions), stored
+    RAW and never collapsed/averaged (Invariant #4). A child of one parent risk_assessment; its provenance
+    is the parent's source_query (written in the same txn). Idempotent on (risk_assessment_id, signal)."""
+    id: str = Field(default_factory=_new_id)
+    risk_assessment_id: str
+    signal: str                       # the source's own sub-signal key (e.g. 'mixer', 'hacker')
+    score: float | None = None
+    score_scale: str | None = None
+
+
 class Valuation(BaseModel):
     id: str = Field(default_factory=_new_id)
     subject_type: Literal["transfer", "tx_output"]

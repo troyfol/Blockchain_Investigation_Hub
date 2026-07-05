@@ -147,9 +147,13 @@ def _playwright_available() -> bool:
 def _render_with_engine(exe: str, html_path: Path, pdf_path: Path, *, budget_ms: int = 12000) -> None:
     """Headless print-to-PDF via the OS Chromium engine. ``--virtual-time-budget`` advances the page's
     timers so the Cytoscape ``cose`` layout settles (the report sets ``window.__CY_READY__`` when done)
-    before the page is captured; ``--no-pdf-header-footer`` keeps the exhibit clean. A FRESH
-    ``--user-data-dir`` is mandatory: without it, a headless print invocation silently no-ops when the
-    user already has Edge/Chrome open on the default profile (a well-known gotcha).
+    before the page is captured. ``--no-pdf-header-footer`` stays set so the browser prints NO default
+    header/footer of its own — leaving the report's court-formal running footer (case id + "Page N of M",
+    a CSS ``@page`` margin-box footer the report HTML carries, FN-12) as the ONLY footer, and keeping the
+    local ``file://`` path the browser's default footer would show from leaking into the exhibit. (Blink
+    renders CSS ``@page`` margin-box ``counter(page)``/``counter(pages)`` on this CLI path — verified this
+    phase.) A FRESH ``--user-data-dir`` is mandatory: without it, a headless print invocation silently
+    no-ops when the user already has Edge/Chrome open on the default profile (a well-known gotcha).
 
     On a DENSE graph the synchronous cose layout can exceed the budget, leaving the engine to exit 0 but
     write NO PDF — we raise :class:`DenseRenderError` (a NoRendererError subclass, so it still degrades to
@@ -205,8 +209,10 @@ def _render_with_playwright(html_path: Path, pdf_path: Path) -> None:
             page = browser.new_page(viewport={"width": 1240, "height": 1000})
             page.goto(html_path.resolve().as_uri())
             page.wait_for_function("window.__CY_READY__ === true", timeout=30000)
-            page.pdf(path=str(pdf_path), format="A4", print_background=True,
-                     margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"})
+            # P14: honor the report's CSS `@page` size + margins (preferCSSPageSize) so the Playwright
+            # fallback paginates identically to the default Edge/Chrome `--print-to-pdf` path, instead of
+            # overriding them with hardcoded margins here.
+            page.pdf(path=str(pdf_path), print_background=True, prefer_css_page_size=True)
         finally:
             browser.close()
 

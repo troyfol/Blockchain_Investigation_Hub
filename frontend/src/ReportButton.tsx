@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useState } from "react";
 import { isWindowed } from "./cases";
 import { getActiveJob } from "./jobs";
 import { openReportFile, type ReportResult, reportSummary, runReport } from "./report";
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // The Report button (P8.5): generate an immutable report of the active case from the UI, show its
 // content_hash (the immutability proof) + where the files landed, and open the PDF (OS opener, windowed
@@ -23,7 +24,10 @@ const mono: React.CSSProperties = {
   padding: "6px 9px", overflowWrap: "anywhere",
 };
 
-export default function ReportButton({ viewParams }: { viewParams?: Record<string, unknown> }) {
+export type ReportHandle = { generate: () => void };
+
+const ReportButton = forwardRef<ReportHandle, { viewParams?: Record<string, unknown> }>(
+  function ReportButton({ viewParams }, ref) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +56,9 @@ export default function ReportButton({ viewParams }: { viewParams?: Record<strin
       .finally(() => setBusy(false));
   }, [viewParams]);
 
+  // P32/UX-07 — expose generate so a global "r" shortcut fires the same report (no-op while one is running).
+  useImperativeHandle(ref, () => ({ generate: () => { if (!busy) generate(); } }), [generate, busy]);
+
   const openPdf = useCallback(() => {
     if (!result?.pdf_path) return;
     openReportFile(result.pdf_path).then(() => setOpened(true))
@@ -72,10 +79,10 @@ export default function ReportButton({ viewParams }: { viewParams?: Record<strin
       </button>
 
       {(result || error) && (
-        <div style={backdrop} onClick={(e) => { if (e.target === e.currentTarget) { setResult(null); setError(null); } }}>
-          <div style={card}>
+        <Modal onClose={() => { setResult(null); setError(null); }} backdropStyle={backdrop}
+               containerStyle={card} labelledBy="report-title">
             <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-              <h2 style={{ margin: 0, fontSize: 17, color: t("ui.text") }}>Report</h2>
+              <h2 id="report-title" style={{ margin: 0, fontSize: 17, color: t("ui.text") }}>Report</h2>
               <button style={{ ...btn, marginLeft: "auto" }} onClick={() => { setResult(null); setError(null); }}
                       aria-label="Close">✕</button>
             </div>
@@ -114,9 +121,10 @@ export default function ReportButton({ viewParams }: { viewParams?: Record<strin
                 </div>
               </>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </>
   );
-}
+});
+
+export default ReportButton;

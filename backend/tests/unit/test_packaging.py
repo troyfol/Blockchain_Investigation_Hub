@@ -112,6 +112,21 @@ def test_signing_is_optional_and_skips_cleanly_without_a_cert(monkeypatch):
     assert result["skipped"] is True and result["signed"] == []
 
 
+# --------------------------------------------------------------------------- bundled sample (P39)
+
+def test_bih_spec_bundles_the_first_run_sample_case():
+    """P39: the first-run sample .casefile must be declared in app_paths.BUNDLED_RESOURCES, present on
+    disk, AND wired into bih.spec's datas — else the packaged app ships without it and 'Explore the
+    sample case' 404s in the frozen build (which source-mode tests can't catch)."""
+    from backend.app.app_paths import BUNDLED_RESOURCES
+
+    rel = BUNDLED_RESOURCES.get("sample_casefile")
+    assert rel and rel.endswith(".casefile"), "sample_casefile missing from BUNDLED_RESOURCES"
+    assert (ROOT / rel).exists(), f"bundled sample casefile not found at {rel}"
+    spec = (ROOT / "bih.spec").read_text(encoding="utf-8")
+    assert rel in spec, "bih.spec datas do not bundle the sample .casefile"
+
+
 def test_sign_config_reads_pfx_and_thumbprint(monkeypatch):
     monkeypatch.delenv("BIH_SIGN_THUMBPRINT", raising=False)
     monkeypatch.setenv("BIH_SIGN_PFX", r"C:\certs\bih.pfx")

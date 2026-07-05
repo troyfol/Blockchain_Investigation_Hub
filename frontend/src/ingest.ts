@@ -68,6 +68,17 @@ export function buildExpandRequest(addressRaw: string, evmChain: string, depth: 
   return { chain, address, bounds: depthBounds(depth, det.family) };
 }
 
+// P23/FN-13: what a re-fetch CHANGED vs the state just before it (read-only diff from the backend).
+export type RefetchDiff = {
+  new_transfers: number;
+  new_transfer_ids: string[];
+  provisional_to_final: { chain: string; tx_hash: string }[];
+  corrected: { chain: string; tx_hash: string; before: string; after: string }[];
+  new_claims: Record<string, number>;
+  changed: boolean;
+  summary: string;
+};
+
 export type ExpandResponse = {
   graph: GraphData;
   partial: boolean;
@@ -75,7 +86,25 @@ export type ExpandResponse = {
   offline?: boolean;
   needs_key?: string;
   canceled?: boolean;   // P8.7.2 — the fetch was canceled (case left consistent)
+  diff?: RefetchDiff;   // P23/FN-13 — new/matured/corrected since the last fetch (best-effort; may be absent)
 };
+
+// A friendly one-line summary of what a re-fetch CHANGED (new movements, finality maturation, corrections,
+// new claims), or null when nothing changed / the backend attached no diff. Pure — unit-tested. The finality
+// maturation phrasing surfaces Invariant #6 (provisional → final) to the investigator.
+export function refetchDiffSummary(resp: ExpandResponse): string | null {
+  const d = resp?.diff;
+  if (!d || !d.changed) return null;
+  const parts: string[] = [];
+  if (d.new_transfers > 0) parts.push(`+${d.new_transfers} transfer${d.new_transfers === 1 ? "" : "s"}`);
+  const k = d.provisional_to_final?.length ?? 0;
+  if (k > 0) parts.push(`${k} matured to final`);
+  const c = d.corrected?.length ?? 0;
+  if (c > 0) parts.push(`${c} corrected`);
+  const claims = Object.values(d.new_claims || {}).reduce((a, b) => a + b, 0);
+  if (claims > 0) parts.push(`+${claims} claim${claims === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(", ") : null;
+}
 
 // Turn an expand RESPONSE into a human message, or null when the ingest succeeded. The backend already
 // returns friendly text for offline + the missing-Etherscan-key case; this keeps the mapping honest and

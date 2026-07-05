@@ -226,12 +226,24 @@ def _unique_dir(base: Path) -> Path:
     return base.parent / f"{base.name}-{i}"
 
 
-def new_case(title: str, *, location: str | Path | None = None) -> dict:
+def new_case(title: str, *, location: str | Path | None = None, template: str | None = None) -> dict:
     """Create a fresh case folder (at ``location`` or the default cases root), migrate it, write its
-    ``case_meta``, register it, and make it active. Returns ``{path, created: True}``."""
+    ``case_meta``, register it, and make it active. Returns ``{path, created: True}``.
+
+    ``template`` (P26/FN-22): an optional declarative preset. When given, it pre-seeds the case's per-case
+    ``description`` (a methodology stub), enables its scenario connectors (app-wide settings), and echoes a
+    ``default_bounds`` first-ingest hint back to the caller — settings/metadata ONLY, never a fabricated
+    fact (Invariants #1/#3). An unknown id is rejected. With no template the case is byte-identical to
+    today's from-scratch case."""
     title = (title or "").strip()
     if not title:
         raise ValueError("a case needs a non-empty title")
+    tmpl = None
+    if template:
+        from .case_templates import get_template
+        tmpl = get_template(template)
+        if tmpl is None:
+            raise ValueError(f"unknown case template {template!r}")
     root = _confined_root(location, param="location")
     case_dir = _unique_dir(root / _slug(title))
     case_db = case_dir / "case.db"
@@ -239,11 +251,20 @@ def new_case(title: str, *, location: str | Path | None = None) -> dict:
     conn = get_connection(case_db)
     try:
         if conn.execute("SELECT 1 FROM case_meta LIMIT 1").fetchone() is None:
-            repo.init_case(conn, title=title)
+            repo.init_case(conn, title=title, description=(tmpl["description"] if tmpl else None))
     finally:
         conn.close()
+    if tmpl:
+        # App-wide connector enables — settings only, no facts (Inv #1/#3). Data still enters via a real fetch.
+        from . import settings_store
+        for name in tmpl.get("connectors", []):
+            settings_store.set_paid_enabled(name, True)
     res = set_active_case(case_db)
-    return {"path": res["path"], "created": True}
+    out = {"path": res["path"], "created": True}
+    if tmpl:
+        out["template"] = {"id": tmpl["id"], "name": tmpl["name"],
+                           "default_bounds": tmpl.get("default_bounds", {})}
+    return out
 
 
 def open_case(path: str | Path) -> dict:
@@ -293,6 +314,32 @@ def import_casefile(casefile_path: str | Path, *, allow_untrusted: bool = False,
         shutil.rmtree(dest, ignore_errors=True)
         out["extracted_to"] = None
     return out
+
+
+# --------------------------------------------------------------------------- bundled first-run sample (P39)
+
+def sample_casefile_path() -> Path | None:
+    """The bundled first-run sample ``.casefile`` (P39 'Explore the sample case'), or ``None`` when this
+    build ships none. Resolves through ``resource_path`` so it works both in source (repo ``examples/``)
+    and frozen (``_MEIPASS/examples/``)."""
+    from ..app_paths import BUNDLED_RESOURCES, resource_path
+
+    rel = BUNDLED_RESOURCES.get("sample_casefile")
+    if not rel:
+        return None
+    p = resource_path(rel)
+    return p if p.exists() else None
+
+
+def import_sample_case(*, dest_root: str | Path | None = None) -> dict:
+    """Import + open the app's OWN bundled sample case (P39). It runs the SAME verify -> extract -> open
+    path as any user import (never untrusted — it is the app's verified bundle), extracting a fresh copy
+    into the writable cases dir (the read-only bundle is never opened in place). Raises
+    ``FileNotFoundError`` when the build ships no sample."""
+    p = sample_casefile_path()
+    if p is None:
+        raise FileNotFoundError("this build ships no bundled sample case")
+    return import_casefile(p, allow_untrusted=False, dest_root=dest_root)
 
 
 # --------------------------------------------------------------------------- native window (dialogs)

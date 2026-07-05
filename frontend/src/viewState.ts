@@ -74,6 +74,26 @@ export function viewToReportParams(v: ViewState): Record<string, unknown> {
   };
 }
 
+// P34/UX-01 — how many display / de-noise FILTERS deviate from the seed default. Drives the "Filters (N)"
+// badge on the collapsible Filters cluster (P34 header declutter) so the investigator sees at a glance that
+// the view is filtered even while the filter controls are collapsed. Counts clear on/off engagements only
+// (not the spectrum inputs — hops / font steppers): the two default-ON toggles (groupDust, foldPoison)
+// count only when turned OFF (a non-default choice), so a fresh DEFAULT_VIEW reads 0.
+export function activeFilterCount(v: ViewState): number {
+  let n = 0;
+  if (v.groupDust !== DEFAULT_VIEW.groupDust) n++;
+  if (v.groupDenominations !== DEFAULT_VIEW.groupDenominations) n++;
+  if (v.showUnverified !== DEFAULT_VIEW.showUnverified) n++;
+  if (v.foldPoison !== DEFAULT_VIEW.foldPoison) n++;
+  if (Object.keys(v.denomFilters).length > 0) n++;
+  if (v.community !== DEFAULT_VIEW.community) n++;
+  if (v.onlyFlagged !== DEFAULT_VIEW.onlyFlagged) n++;
+  if (v.valueFloor !== DEFAULT_VIEW.valueFloor) n++;
+  if (v.userDustOn !== DEFAULT_VIEW.userDustOn) n++;
+  if (v.ordering !== null) n++;
+  return n;
+}
+
 // Persist the per-case display CHOICES (value basis + active ordering) so they survive a session (#8).
 // localStorage keyed by case path; corruption-tolerant. Ordering is a frontend layout but is remembered
 // here too so a reopened case restores the investigator's last arrangement.

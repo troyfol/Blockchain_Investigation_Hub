@@ -84,6 +84,30 @@ def test_numeric_score_change_is_a_new_side_by_side_row(case):
     assert all(r.passed for r in run_audits(db_path=str(db)))
 
 
+def test_get_risk_writes_risk_detail_rows(case, monkeypatch):
+    """FN-26 (P21): the connector's get_risk write path maps each nested risk_detail[] entry into a
+    first-class `risk_detail` row (P20's table), end-to-end — no live key (the wire `_fetch` is
+    monkeypatched; live field names stay TODO: confirm / UNVERIFIED). Each sub-signal is stored RAW
+    (Invariant #4); the audits stay green."""
+    from backend.app.audits.runner import run_audits
+    conn, db = case
+    c = MisTrackConnector(api_key="k")
+    data = {"score": 72, "risk_level": "High", "risk_detail": [
+        {"risk_type": "mixer", "entity": "tornado", "exposure_type": "direct", "hop_num": 1,
+         "volume": 1000, "percent": 80},
+        {"risk_type": "phishing", "entity": "x", "exposure_type": "indirect", "hop_num": 2,
+         "volume": 50, "percent": 12}]}
+    monkeypatch.setattr(c, "_fetch", lambda path, coin, address: ({"success": True, "data": data}, data))
+    res = c.get_risk(conn, "ethereum", "0x52908400098527886e0f7030069857d2e4169ee7")
+    c.close()
+
+    assert res["risks"] == 1 and res["detail_signals"] == 2
+    rows = {r["signal"]: (r["score"], r["score_scale"]) for r in
+            conn.execute("SELECT signal, score, score_scale FROM risk_detail").fetchall()}
+    assert rows == {"mixer": (80.0, "percent"), "phishing": (12.0, "percent")}  # percent as score (TODO: confirm)
+    assert all(r.passed for r in run_audits(db_path=str(db)))
+
+
 # --- pure-mapper logic (synthetic input; confirmed schema) ------------------------------------
 
 def test_risk_scale_is_3_100_and_breakdown_raw():

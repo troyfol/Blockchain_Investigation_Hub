@@ -107,3 +107,31 @@ describe("client", () => {
     expect(JSON.parse(calls[0].opts.body)).toEqual({ chain: "bitcoin", address: "bc1xyz", bounds: { max_pages: 3 } });
   });
 });
+
+describe("refetchDiffSummary", () => {
+  const diff = (over: Partial<I.RefetchDiff> = {}): I.RefetchDiff => ({
+    new_transfers: 0, new_transfer_ids: [], provisional_to_final: [], corrected: [],
+    new_claims: {}, changed: false, summary: "", ...over,
+  });
+  const resp = (d?: I.RefetchDiff): I.ExpandResponse => ({ graph: G(0), partial: false, diff: d });
+
+  it("returns null when there is no diff or nothing changed", () => {
+    expect(I.refetchDiffSummary(resp())).toBeNull();
+    expect(I.refetchDiffSummary(resp(diff({ changed: false, new_transfers: 3 })))).toBeNull();
+  });
+  it("summarizes new transfers + finality maturation (Invariant #6 surfaced)", () => {
+    const s = I.refetchDiffSummary(resp(diff({
+      changed: true, new_transfers: 1,
+      provisional_to_final: [{ chain: "ethereum", tx_hash: "0xabc" }],
+    })));
+    expect(s).toBe("+1 transfer, 1 matured to final");
+  });
+  it("pluralizes and includes corrections + new claims", () => {
+    const s = I.refetchDiffSummary(resp(diff({
+      changed: true, new_transfers: 2,
+      corrected: [{ chain: "ethereum", tx_hash: "0x1", before: "a", after: "b" }],
+      new_claims: { attribution: 1, risk_assessment: 2 },
+    })));
+    expect(s).toBe("+2 transfers, 1 corrected, +3 claims");
+  });
+});

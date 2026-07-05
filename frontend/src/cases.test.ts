@@ -35,12 +35,19 @@ describe("cases API client drives the active-case endpoints", () => {
     expect(await C.listCases()).toEqual([{ path: "/a" }]);
   });
 
-  it("newCase POSTs title + location", async () => {
+  it("newCase POSTs title + location (+ null template by default)", async () => {
     const calls = mockFetch({ active: { title: "N" }, path: "/p" });
     await C.newCase("My Case", "/loc");
     expect(calls[0].url).toBe("/api/cases/new");
     expect(calls[0].opts.method).toBe("POST");
-    expect(JSON.parse(calls[0].opts.body)).toEqual({ title: "My Case", location: "/loc" });
+    expect(JSON.parse(calls[0].opts.body)).toEqual({ title: "My Case", location: "/loc", template: null });
+  });
+
+  it("newCase forwards a chosen template id (P26/FN-22)", async () => {
+    const calls = mockFetch({ active: { title: "N" }, path: "/p" });
+    await C.newCase("Sanctions", null, "sanctions-tracing");
+    expect(JSON.parse(calls[0].opts.body))
+      .toEqual({ title: "Sanctions", location: null, template: "sanctions-tracing" });
   });
 
   it("openCase POSTs the path", async () => {

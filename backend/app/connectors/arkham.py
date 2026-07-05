@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from ..db import repository as repo
 from ..db.repository import utc_now_iso
-from ..models import Address, Attribution, EntityMembership, RiskAssessment, SourceQuery
+from ..models import Address, Attribution, EntityMembership, RiskAssessment, RiskDetail, SourceQuery
 from ..normalization.arkham_api_adapter import adapt_address, adapt_risk, entity_key
 from ..normalization.canonical import canonical_address
 from ..provenance.atomic import write_with_provenance
@@ -113,10 +113,16 @@ class ArkhamApiConnector(BaseHttpConnector):
             addr_id = repo.upsert_address(c, Address(chain=chain, address_display=address), sqid)
             if risk is None or risk.score is None:
                 return {"risks": 0}  # no score -> still records the check (provenance), no row
-            repo.upsert_risk_assessment(c, RiskAssessment(
+            ra_id = repo.upsert_risk_assessment(c, RiskAssessment(
                 address_id=addr_id, score=risk.score, score_scale=risk.score_scale,
                 category=risk.category, rationale=risk.rationale, source=self.source, retrieved_at=now), sqid)
-            return {"risks": 1, "score": risk.score, "category": risk.category}
+            # FN-15: each per-category sub-signal → a first-class RAW risk_detail row (Invariant #4).
+            for d in risk.details:
+                repo.insert_risk_detail(c, RiskDetail(
+                    risk_assessment_id=ra_id, signal=d.signal, score=d.score,
+                    score_scale=risk.score_scale), sqid)
+            return {"risks": 1, "score": risk.score, "category": risk.category,
+                    "detail_signals": len(risk.details)}
 
         _, res = write_with_provenance(conn, sq, write, raw_response=payload)
         return res

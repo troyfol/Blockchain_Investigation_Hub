@@ -13,7 +13,7 @@ from .. import AuditContext, AuditResult, audit_check
 
 FACT_TABLES = ["asset", "address", "transaction_", "transfer", "tx_output", "tx_input"]
 CLAIM_TABLES = [
-    "attribution", "risk_assessment", "valuation", "balance_snapshot",
+    "attribution", "risk_assessment", "risk_detail", "valuation", "balance_snapshot",
     "entity_membership", "entity_membership_retraction",
 ]
 # Claim tables whose investigator-authored rows (source='investigator') may have NULL provenance.

@@ -343,12 +343,20 @@ export function buildCytoscapeStyle(fontScale: number = 1, theme: string = _acti
     { selector: "edge", style: {
         width: sz(1.6), "line-color": t("edge.default.line"), "target-arrow-color": t("edge.default.line"),
         "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": 0.85 } },
+    // P35/UX-02 — a SECOND, COLOR-INDEPENDENT channel: each fact-edge kind carries a DISTINCT target-arrow
+    // shape (filled triangle = EVM transfer · tee/bar = BTC input · open vee = BTC output), so the three read
+    // apart in grayscale / for color-blind users, not by hue alone. `tx_input` is also shifted OFF the amber
+    // band (tokens.json) so it no longer blends into the amber transaction-node rim. Mirrored in the report
+    // twin (backend/app/theme.py::cytoscape_style) + both legends.
     { selector: 'edge[kind="transfer"]', style: {
-        "line-color": t("edge.transfer.line"), "target-arrow-color": t("edge.transfer.line") } },
+        "line-color": t("edge.transfer.line"), "target-arrow-color": t("edge.transfer.line"),
+        "target-arrow-shape": "triangle" } },
     { selector: 'edge[kind="tx_input"]', style: {
-        "line-color": t("edge.tx_input.line"), "target-arrow-color": t("edge.tx_input.line") } },
+        "line-color": t("edge.tx_input.line"), "target-arrow-color": t("edge.tx_input.line"),
+        "target-arrow-shape": "tee" } },
     { selector: 'edge[kind="tx_output"]', style: {
-        "line-color": t("edge.tx_output.line"), "target-arrow-color": t("edge.tx_output.line") } },
+        "line-color": t("edge.tx_output.line"), "target-arrow-color": t("edge.tx_output.line"),
+        "target-arrow-shape": "vee" } },
 
     // Dust-aggregate edge (focus <-> summary node): a dashed bundle edge, width by the aggregate's total USD.
     { selector: 'edge[kind="aggregate"]', style: {
@@ -380,13 +388,15 @@ export function buildCytoscapeStyle(fontScale: number = 1, theme: string = _acti
         "text-margin-y": 0, "text-background-opacity": 0 } },
     { selector: 'edge[kind="poison"]', style: {
         "line-color": t("edge.poison.line"), "target-arrow-color": t("edge.poison.line"),
-        "line-style": "dashed", width: ewWidth } },
+        "line-style": "dashed", "line-dash-pattern": [6, 3, 1, 3], width: ewWidth } },
 
     // The poison-suspect FLAG on an individual edge/node (shown when NOT folded): a red dotted outline so
     // "possible address poisoning" reads at a glance without asserting it as fact.
+    // P36/UX-04 — POISON heuristic dash family = dash-dot [6,3,1,3] (see the provisional rule below for the
+    // full dash-MEANING scheme). The suspect flag joins the poison bundle's language so both read "poison".
     { selector: "edge[?poison_suspect]", style: {
         "line-color": t("edge.poison.line"), "target-arrow-color": t("edge.poison.line"),
-        "line-style": "dotted", opacity: 0.85 } },
+        "line-style": "dashed", "line-dash-pattern": [6, 3, 1, 3], opacity: 0.85 } },
     { selector: "node[?poison_suspect]", style: {
         "outline-color": t("node.poison.rim"), "outline-width": 3, "outline-offset": 2,
         "border-style": "dotted" } },
@@ -432,18 +442,23 @@ export function buildCytoscapeStyle(fontScale: number = 1, theme: string = _acti
     // is staggered by the read-model's per-edge `label_dy` so adjacent trace labels don't stack at a hub.
     { selector: 'edge[trace="fifo"]', style: {
         "line-color": t("edge.trace.fifo.line"), "target-arrow-color": t("edge.trace.fifo.line"),
-        "line-style": "dashed", width: sz(2.4), label: "fifo", "font-size": fs(8), color: t("edge.trace.fifo.label"),
+        "line-style": "dashed", "line-dash-pattern": [12, 4], width: sz(2.4), label: "fifo", "font-size": fs(8), color: t("edge.trace.fifo.label"),
         "text-background-color": t("edge.trace.fifo.labelBg"), "text-background-opacity": 0.85,
         "text-background-padding": 2, "text-background-shape": "roundrectangle",
         "text-rotation": "autorotate", "text-margin-y": "data(label_dy)", "min-zoomed-font-size": 6 } },
     { selector: 'edge[trace="investigator"]', style: {
         "line-color": t("edge.trace.investigator.line"), "target-arrow-color": t("edge.trace.investigator.line"),
-        "line-style": "dotted", width: sz(2.4), label: "manual", "font-size": fs(8),
+        "line-style": "dashed", "line-dash-pattern": [12, 4, 2, 4], width: sz(2.4), label: "manual", "font-size": fs(8),
         color: t("edge.trace.investigator.line"), "text-rotation": "autorotate",
         "text-margin-y": "data(label_dy)", "min-zoomed-font-size": 6 } },
 
-    // Provisional (tip) facts: dashed + faded (Invariant #6).
-    { selector: 'edge[finality_status="provisional"]', style: { "line-style": "dashed", opacity: 0.55 } },
+    // Provisional (tip) facts: FINE-DOTTED + faded (Invariant #6). P36/UX-04 — the three dash MEANING families
+    // are now visually distinct so a dashed edge decodes without guessing: FINALITY = fine dots [1,4] ·
+    // TRACE-CONVENTION = long dashes (fifo [12,4] / investigator long-dash-dot [12,4,2,4]) · POISON heuristic
+    // = dash-dot [6,3,1,3]. (The bundle edges — aggregate/user_dust/unverified — stay plain-dashed; their
+    // meaning is the bundle NODE, not the dash.) Documented in the legend, live + report.
+    { selector: 'edge[finality_status="provisional"]', style: {
+        "line-style": "dashed", "line-dash-pattern": [1, 4], opacity: 0.55 } },
     { selector: 'node[finality_status="provisional"]', style: {
         "border-width": 2, "border-color": t("node.provisional.border"),
         "border-style": "dashed", "background-opacity": 0.5 } },
@@ -494,18 +509,22 @@ export function legendItems(g: LegendGraph): LegendItem[] {
   if (nodeKinds.has("user_dust")) items.push({ label: "Value-filtered (below threshold)", color: t("node.dust.user.rim"), marker: "node" });
   if (nodeKinds.has("unverified")) items.push({ label: "Unverified / unpriced tokens", color: t("node.unverified.rim"), marker: "node" });
   if (nodeKinds.has("poison") || g.nodes.some((n) => n.poison_suspect) || g.edges.some((e) => e.poison_suspect))
-    items.push({ label: "Possible address-poisoning (heuristic)", color: t("node.poison.rim"), marker: "ring" });
+    items.push({ label: "Possible address-poisoning — dash-dot (heuristic)", color: t("node.poison.rim"), marker: "ring" });
   if (g.nodes.some((n) => n.group_type === "denomination")) items.push({ label: "Denomination pool", color: t("group.denomination.border"), marker: "ring" });
-  if (edgeKinds.has("transfer")) items.push({ label: lbl("edge.transfer.line"), color: t("edge.transfer.line"), marker: "edge" });
-  if (edgeKinds.has("tx_input")) items.push({ label: lbl("edge.tx_input.line"), color: t("edge.tx_input.line"), marker: "edge" });
-  if (edgeKinds.has("tx_output")) items.push({ label: lbl("edge.tx_output.line"), color: t("edge.tx_output.line"), marker: "edge" });
+  // P35/UX-02 — name each fact-edge's ARROW SHAPE in the label so the legend documents the color-independent
+  // channel (filled triangle / tee bar / open vee), not just the hue (mirrored in the report's static legend).
+  if (edgeKinds.has("transfer")) items.push({ label: "EVM transfer (filled arrow)", color: t("edge.transfer.line"), marker: "edge" });
+  if (edgeKinds.has("tx_input")) items.push({ label: "Bitcoin input (bar arrow)", color: t("edge.tx_input.line"), marker: "edge" });
+  if (edgeKinds.has("tx_output")) items.push({ label: "Bitcoin output (chevron)", color: t("edge.tx_output.line"), marker: "edge" });
   if (has.sanctioned) items.push({ label: "Sanctioned (OFAC)", color: t("node.risk.sanctioned.halo"), marker: "halo" });
   if (has.elevated) items.push({ label: "Other risk", color: t("node.risk.elevated.halo"), marker: "halo" });
   if (has.attribution) items.push({ label: "Attributed entity", color: t("node.entity.ring"), marker: "ring" });
   if (has.annotation) items.push({ label: "Annotated (has note)", color: t("node.annotation.ring"), marker: "ring" });
   if (has.coinjoin) items.push({ label: lbl("node.flag.coinjoin.ring"), color: t("node.flag.coinjoin.ring"), marker: "ring" });
-  if (has.fifo) items.push({ label: "FIFO trace (convention)", color: t("edge.trace.fifo.line"), marker: "edge" });
-  if (has.investigator) items.push({ label: "Investigator trace", color: t("edge.trace.investigator.line"), marker: "edge" });
-  if (has.provisional) items.push({ label: "Provisional (dashed)", color: t("node.provisional.border"), marker: "edge" });
+  // P36/UX-04 — name each dash MEANING family so a dashed edge decodes from the legend (finality vs
+  // trace-convention vs poison), not by guessing.
+  if (has.fifo) items.push({ label: "FIFO trace — long dash (convention)", color: t("edge.trace.fifo.line"), marker: "edge" });
+  if (has.investigator) items.push({ label: "Investigator trace — long dash-dot", color: t("edge.trace.investigator.line"), marker: "edge" });
+  if (has.provisional) items.push({ label: "Provisional — fine dots (tip)", color: t("node.provisional.border"), marker: "edge" });
   return items;
 }

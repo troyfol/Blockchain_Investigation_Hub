@@ -24,9 +24,12 @@ Resolved decisions (full reconciliation in the findings note; `TODO: confirm` wh
     base-unit integer, so `amount = round(Decimal(unitValue) × 10^decimals)` — parsed via `Decimal`, never
     float. A product with MORE precision than `decimals` is flagged `rounded` and surfaced. **Honesty
     caveat:** the commoner loss — Arkham *truncating* a high-decimal token's display (e.g. showing
-    `1.2346` for a true `1.234567…`) — yields an *integral* product and is therefore NOT flagged; such
-    amounts are low-order-lossy and the authoritative value needs a chain re-fetch (Etherscan). *TODO:
-    confirm exactness for high-decimal tokens.*
+    `1.2346` for a true `1.234567…`) — yields an *integral* product, so the `rounded` flag misses it;
+    **FN-24/P19 now catches it separately** — a non-zero amount whose display carried FEWER fractional
+    digits than `decimals` is counted in `notes["truncation_risk"]` (surfaced by the connector) so the
+    low-order-lossy figure is never taken as silently authoritative. It is still recorded (the movement
+    happened) but flagged; the authoritative low-order value needs a chain re-fetch (Etherscan/Bitquery).
+    *TODO: confirm exactness for high-decimal tokens.*
 
 (b) **`type` is DIRECTION, not the transfer-type enum.** Arkham's `type` is `inflow`/`outflow` relative to
     the queried subject (empty when neither party is the subject) — NOT `native/erc20/internal`. We derive
@@ -46,7 +49,10 @@ Resolved decisions (full reconciliation in the findings note; `TODO: confirm` wh
     `tether`/`bitcoin`, DeFiLlama-style pricing key) — NOT an erc721 id — and is not needed for the raw
     transfer; it would only matter for a future valuation join.
 
-(f) **`historicalUSD`** is a SOURCED valuation claim, not a raw fact — kept OUT of the transfer write.
+(f) **`historicalUSD`** is a SOURCED valuation claim, not a raw fact — kept OUT of the transfer write, but
+    carried on the ``ParsedTransfer`` (``historical_usd``) so the connector records it as a SECOND
+    ``valuation`` claim (``source='arkham'``) alongside DeFiLlama — never merged (Invariant #4). It is the
+    source's stated *total* USD value-at-time; a malformed/absent value writes NO valuation (honest gap).
 
 NOT done — attribution: address→entity/label/confidence is not in any UI export; it requires Arkham's
 official API (Path B, Invariant #1). `from/toLabel` are too thin (often bare addresses) to synthesize from.
@@ -106,11 +112,24 @@ def _decimals(row: dict, is_native: bool) -> int:
     return 18 if is_native else 0  # native coins are 18-dec; a token missing decimals -> 0 (surfaced)
 
 
-def _to_base_units(unit_value: str, decimals: int) -> tuple[str, bool]:
-    """display value × 10^decimals → raw base-unit integer TEXT. Decimal (never float). (amount, rounded)."""
-    scaled = Decimal(str(unit_value)) * (Decimal(10) ** decimals)
+def _to_base_units(unit_value: str, decimals: int) -> tuple[str, bool, bool]:
+    """display value × 10^decimals → raw base-unit integer TEXT. Decimal (never float).
+
+    Returns ``(amount, rounded, truncation_risk)``:
+      - ``rounded``: the display carried MORE precision than ``decimals`` (product non-integral, rounded
+        half-even to fit) — a visible over-precision signal.
+      - ``truncation_risk`` (FN-24/P19): the display carried FEWER fractional digits than ``decimals`` on a
+        non-zero amount, so the low-order base-unit digits are display-rounded (not source-verified). This
+        is the *integral-product* case decision (a) calls low-order-lossy — the authoritative value needs a
+        chain re-fetch (Etherscan/Bitquery). The two flags are mutually exclusive (over- vs under-precision).
+    """
+    value = Decimal(str(unit_value))
+    scaled = value * (Decimal(10) ** decimals)
     integral = scaled.to_integral_value(rounding=ROUND_HALF_EVEN)
-    return str(int(integral)), integral != scaled
+    exp = value.as_tuple().exponent  # int for a finite Decimal; 'n'/'N'/'F' for NaN/Inf (caught downstream)
+    frac_digits = -exp if isinstance(exp, int) and exp < 0 else 0
+    truncation_risk = frac_digits < decimals and int(integral) != 0
+    return str(int(integral)), integral != scaled, truncation_risk
 
 
 def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], dict]:
@@ -122,8 +141,9 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
     differently. Other note counters surface the open-decision signals (rounded amounts, the unmapped
     direction `type`, dropped `tokenId`).
     """
-    notes = {"rows": 0, "transfers": 0, "skipped": 0, "rounded_amounts": 0, "type_present": 0,
-             "tokenid_present": 0, "rejected_utxo": [], "rejected_unsupported": [], "errors": []}
+    notes = {"rows": 0, "transfers": 0, "skipped": 0, "rounded_amounts": 0, "truncation_risk": 0,
+             "type_present": 0, "tokenid_present": 0, "valuations": 0, "rejected_utxo": [],
+             "rejected_unsupported": [], "errors": []}
     by_tx: dict[tuple[str, str], ParsedTransaction] = {}  # (chain, tx_hash) — LOG-10
     pos: dict[tuple, int] = {}
 
@@ -155,7 +175,7 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
             is_native = not token
             transfer_type = "native" if is_native else "erc20"
             decimals = _decimals(row, is_native)
-            amount, rounded = _to_base_units(unit, decimals)
+            amount, rounded, truncated = _to_base_units(unit, decimals)
             block_height = _int_or_none(row.get("blockNumber"))
             from_addr = _canon_or_none(chain, row.get("fromAddress"))
             to_addr = _canon_or_none(chain, row.get("toAddress"))
@@ -169,6 +189,8 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
 
         if rounded:
             notes["rounded_amounts"] += 1
+        if truncated:
+            notes["truncation_risk"] += 1  # FN-24: display carried fewer digits than decimals — low-order-lossy
         # LOG-10: key on (chain, tx_hash), NOT the hash alone — an EVM tx hash replayed across two chains
         # in one multichain export must NOT collapse into a single transaction on the first-seen chain
         # (which loses the second chain's tx and makes transfer.chain != transaction_.chain).
@@ -179,6 +201,18 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
                 block_ts=to_canonical_ts(row.get("blockTimestamp")),  # LOG-05: one canonical format
                 fee=None, status=None, confirmations=None, finality_status="provisional"))
 
+        # (f) `historicalUSD` (source-stated total USD value-at-time) → carried for a SECOND `valuation`
+        # claim, NOT the transfer fact. Parsed OUTSIDE the hard-refuse block above: a malformed price is an
+        # optional-claim gap (no valuation), never a transfer-fact error that would roll the import back.
+        historical_usd = None
+        hist_raw = (row.get("historicalUSD") or "").strip()
+        if hist_raw:
+            try:
+                historical_usd = format(Decimal(hist_raw), "f")  # store the source's value verbatim
+                notes["valuations"] += 1
+            except InvalidOperation:
+                pass
+
         key = (chain, tx_hash, transfer_type)
         position = pos.get(key, 0)
         pos[key] = position + 1
@@ -186,7 +220,8 @@ def adapt_arkham_transfers(rows: list[dict]) -> tuple[list[ParsedTransaction], d
             chain=chain, from_address=from_addr, to_address=to_addr,
             asset=asset, amount=amount, transfer_type=transfer_type, position=position,
             from_address_display=_display_or_none(row.get("fromAddress")),  # COR-02: keep EIP-55 checksum
-            to_address_display=_display_or_none(row.get("toAddress"))))
+            to_address_display=_display_or_none(row.get("toAddress")),
+            historical_usd=historical_usd))
         notes["transfers"] += 1
 
     return list(by_tx.values()), notes

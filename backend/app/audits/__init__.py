@@ -40,6 +40,11 @@ class AuditContext:
     conn: sqlite3.Connection
     db_path: Path
     baselines: "BaselineStore"
+    # Cross-run baselines the operator EXPLICITLY discarded this run (the runner's ``--rebaseline``
+    # escape hatch). A check reads this to tell a sanctioned operator re-baseline from a silent re-open:
+    # e.g. the in-DB anchor guard (P27) must fire on a bare sidecar loss but yield to an explicit
+    # re-baseline that the operator verified out-of-band.
+    rebaselined: frozenset = field(default_factory=frozenset)
 
 
 @dataclass

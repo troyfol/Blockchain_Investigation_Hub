@@ -7,7 +7,9 @@ DB writer resolves ids.
 `TODO: confirm` — the GraphQL query body + every response field path below are UNCONFIRMED against the
 live API (no token at build to record a response). Reads are defensive (`.get`) so a path mismatch
 degrades to "no rows" rather than crashing; the RUN_LIVE drift test (`tests/contract/test_live_drift.py`)
-is the path that confirms/repairs them. No fabricated cassette is used (per the build directive).
+is the path that confirms/repairs them. No fabricated cassette is used (per the build directive). The
+mapping LOGIC (given the assumed shape) is locked by `tests/unit/test_bitquery_adapter.py` +
+`tests/integration/test_bitquery_ingest.py` (P18) — only the live field NAMES/slugs stay `TODO: confirm`.
 Finality: Bitquery does not return confirmations, so facts are marked `provisional` (honest — upgraded by
 an idempotent chain re-fetch, Invariant #6), never frozen `final` on a guess.
 """

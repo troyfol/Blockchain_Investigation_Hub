@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_VIEW, loadCasePrefs, saveCasePrefs, type ViewState, viewLoadSignature, viewToReportParams } from "./viewState";
+import { activeFilterCount, DEFAULT_VIEW, loadCasePrefs, saveCasePrefs, type ViewState, viewLoadSignature, viewToReportParams } from "./viewState";
 
 // viewLoadSignature is the key the App's view-load effect depends on. It encodes two invariants:
 //   * P4 fix: a case SWITCH re-fetches the graph even when the view params are identical (so the new
@@ -97,5 +97,37 @@ describe("viewToReportParams (report renders the current view)", () => {
     const p = viewToReportParams(DEFAULT_VIEW);
     expect(p.user_dust_usd).toBeNull();
     expect(p.denom_filters).toBeNull();
+  });
+});
+
+// P34/UX-01 — activeFilterCount powers the "Filters (N)" badge on the collapsed Filters cluster: it counts
+// how many display / de-noise filters deviate from the seed default (0 on a fresh view).
+describe("activeFilterCount (collapsed Filters-cluster badge)", () => {
+  it("is 0 for the default seed view (nothing filtered)", () => {
+    expect(activeFilterCount(DEFAULT_VIEW)).toBe(0);
+  });
+
+  it("counts each engaged / non-default filter as one", () => {
+    expect(activeFilterCount({ ...DEFAULT_VIEW, onlyFlagged: true })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, valueFloor: 5 })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, userDustOn: true })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, groupDenominations: true })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, showUnverified: true })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, community: true })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, denomFilters: { CDAI: { fold: 1000 } } })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, ordering: { anchor: "addr:x", mode: "value" } })).toBe(1);
+  });
+
+  it("counts the two default-ON toggles ONLY when turned off (a non-default choice)", () => {
+    expect(activeFilterCount({ ...DEFAULT_VIEW, foldPoison: false })).toBe(1);
+    expect(activeFilterCount({ ...DEFAULT_VIEW, groupDust: false })).toBe(1);
+    // at their defaults they do not count
+    expect(activeFilterCount({ ...DEFAULT_VIEW, foldPoison: true, groupDust: true })).toBe(0);
+  });
+
+  it("sums multiple engaged filters", () => {
+    const v: ViewState = { ...DEFAULT_VIEW, onlyFlagged: true, valueFloor: 10, showUnverified: true,
+      community: true };
+    expect(activeFilterCount(v)).toBe(4);
   });
 });

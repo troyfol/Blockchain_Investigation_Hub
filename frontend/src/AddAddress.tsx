@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildExpandRequest, type Depth, DEPTH_LABELS, detectChain, EVM_CHAINS_FALLBACK, EVM_DEFAULT_CHAIN,
-  getChains, ingestAddedData, ingestErrorMessage, postExpand,
+  getChains, ingestAddedData, ingestErrorMessage, postExpand, refetchDiffSummary,
 } from "./ingest";
 import type { GraphData } from "./Graph";
 import { cancelJob, getActiveJob, jobProgressLine } from "./jobs";
 import { t } from "./theme/theme";
+import Progress from "./Progress";
+import Modal from "./Modal";
 
 // The add-address (ingest) modal (P8.5): pull on-chain facts for a NEW address into the active case via
 // POST /api/graph/expand — the way a brand-new empty case is seeded. Distinct from the header search box
@@ -39,6 +41,11 @@ const btn: React.CSSProperties = {
   borderRadius: 6, padding: "7px 13px", fontSize: 13, cursor: "pointer", whiteSpace: "nowrap",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: t("ui.muted"), margin: 0 };
+// P37/UX-05 — a lightweight "Advanced" disclosure toggle (borderless, muted) that collapses the depth knob.
+const disclosureBtn: React.CSSProperties = {
+  background: "transparent", border: 0, color: t("ui.muted"), fontSize: 12, cursor: "pointer",
+  padding: 0, display: "inline-flex", alignItems: "center", gap: 5,
+};
 
 export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSettings, onValued }: Props) {
   const [address, setAddress] = useState("");
@@ -50,8 +57,12 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
   const [needsKey, setNeedsKey] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [progress, setProgress] = useState<string>("");      // P8.7.2 live progress line (job-driven)
+  const [jobProg, setJobProg] = useState<{ valued: number; total: number } | null>(null);  // P29 bar M-of-N
+  const [showAdvanced, setShowAdvanced] = useState(false);   // P37/UX-05 — depth collapsed behind "Advanced"
+  const [succeeded, setSucceeded] = useState(false);         // P37/UX-05 — a completed ingest -> "Done / Add another"
   const pollRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const addrRef = useRef<HTMLInputElement | null>(null);   // P31 — Modal initial-focus target
 
   useEffect(() => { getChains().then((c) => { if (c.evm?.length) setEvmChains(c.evm); }).catch(() => {}); }, []);
   // Stop polling on unmount (closing the modal mid-valuation leaves the bg job running server-side).
@@ -59,12 +70,14 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+    setJobProg(null);   // P29 — hide the determinate bar once polling ends
   }, []);
   const startPolling = useCallback((onDone?: () => void) => {
     stopPolling();
     pollRef.current = window.setInterval(async () => {
       const j = await getActiveJob();
       setProgress(jobProgressLine(j));
+      setJobProg(j ? { valued: j.valued, total: j.total } : null);   // P29 — feed the bar (total 0 => indeterminate)
       if (!j || j.state !== "running") { stopPolling(); onDone?.(); }
     }, 500);
   }, [stopPolling]);
@@ -91,6 +104,13 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
       .catch(() => {});
   }, [startPolling, onValued]);
 
+  // P37/UX-05 — after a successful ingest the footer offers "Done / Add another"; "Add another" clears the
+  // form (keeping the chosen depth + EVM chain) and re-focuses the address input to seed the next one fast.
+  const addAnother = useCallback(() => {
+    setSucceeded(false); setAddress(""); setNote(null); setError(null); setNeedsKey(false); setProgress("");
+    addrRef.current?.focus();
+  }, []);
+
   const ingest = useCallback(() => {
     setError(null); setNeedsKey(false); setNote(null); setProgress("Starting…");
     let req;
@@ -107,9 +127,12 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
         if (msg) { setError(msg); setNeedsKey(resp.needs_key === "etherscan"); return; }
         const added = ingestAddedData(currentGraph, resp.graph);
         onIngested(req.address, !!resp.partial);
-        setNote(added
+        setSucceeded(true);   // P37/UX-05 — a completed pull -> switch the footer to "Done / Add another"
+        const base = added
           ? (resp.partial ? "Ingested (bounded — more data may exist; raise the depth or re-run)." : "Ingested.")
-          : "No new on-chain data found for that address (it may be empty or already ingested).");
+          : "No new on-chain data found for that address (it may be empty or already ingested).";
+        const changes = refetchDiffSummary(resp);   // P23/FN-13: surface what a re-fetch matured/added
+        setNote(changes ? `${base} Changes since last fetch: ${changes}.` : base);
         if (added) kickValuation();   // value the new movements in the background (USD fills in)
       })
       .catch((e) => {
@@ -132,10 +155,10 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
   };
 
   return (
-    <div style={backdrop} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={card}>
+    <Modal onClose={onClose} backdropStyle={backdrop} containerStyle={card}
+           labelledBy="add-address-title" initialFocus={addrRef}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <h2 style={{ margin: 0, fontSize: 17, color: t("ui.text") }}>Add / ingest address</h2>
+          <h2 id="add-address-title" style={{ margin: 0, fontSize: 17, color: t("ui.text") }}>Add / ingest address</h2>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose} aria-label="Close">✕</button>
         </div>
         <p style={hint}>Pull on-chain facts for an address into this case. Bitcoin needs no key; EVM
@@ -143,30 +166,45 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, color: t("ui.text.secondary") }}>Address</span>
-          <input autoFocus value={address} placeholder="0x… or a Bitcoin address" spellCheck={false}
-                 onChange={(e) => setAddress(e.target.value)}
+          <input ref={addrRef} value={address} placeholder="0x… or a Bitcoin address" spellCheck={false}
+                 onChange={(e) => { setAddress(e.target.value); if (succeeded) setSucceeded(false); }}
                  onKeyDown={(e) => { if (e.key === "Enter" && canIngest) ingest(); }}
                  style={{ ...field, fontFamily: "ui-monospace, monospace" }} />
           <span style={{ fontSize: 11, color: badgeColor }}>{badge}</span>
         </label>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {det.family === "evm" && (
+        {/* The EVM chain (when the 0x… address is chain-ambiguous) stays visible — it can't be inferred from
+            the address, and the wrong chain silently ingests nothing. The chain FAMILY is auto-detected (badge). */}
+        {det.family === "evm" && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontSize: 12, color: t("ui.text.secondary") }}>EVM chain</span>
               <select value={evmChain} onChange={(e) => setEvmChain(e.target.value)} style={field}>
                 {evmChains.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
+          </div>
+        )}
+
+        {/* P37/UX-05 — depth (an advanced hop-breadth knob) is collapsed behind a disclosure so the default
+            path is just type-address → Enter. Collapsing never resets the chosen depth; a non-default depth is
+            surfaced on the toggle so it is never silently hidden. */}
+        <div>
+          <button type="button" onClick={() => setShowAdvanced((v) => !v)} style={disclosureBtn}
+                  aria-expanded={showAdvanced}>
+            <span style={{ fontSize: 10 }}>{showAdvanced ? "▾" : "▸"}</span>
+            Advanced{depth !== "standard" ? ` · depth: ${DEPTH_LABELS[depth]}` : ""}
+          </button>
+          {showAdvanced && (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8, maxWidth: 260 }}>
+              <span style={{ fontSize: 12, color: t("ui.text.secondary") }}>Depth (hops / breadth)</span>
+              <select value={depth} onChange={(e) => setDepth(e.target.value as Depth)} style={field}>
+                {(Object.keys(DEPTH_LABELS) as Depth[]).map((d) => (
+                  <option key={d} value={d}>{DEPTH_LABELS[d]}</option>
+                ))}
+              </select>
+            </label>
           )}
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: 12, color: t("ui.text.secondary") }}>Depth</span>
-            <select value={depth} onChange={(e) => setDepth(e.target.value as Depth)} style={field}>
-              {(Object.keys(DEPTH_LABELS) as Depth[]).map((d) => (
-                <option key={d} value={d}>{DEPTH_LABELS[d]}</option>
-              ))}
-            </select>
-          </label>
         </div>
 
         {error && (
@@ -184,24 +222,37 @@ export default function AddAddress({ onClose, onIngested, currentGraph, onOpenSe
         {/* P8.7.2 — a LIVE progress line (pages fetched / rate-limited / valuing M of N) replaces the
             static spinner, with a Cancel that stops the in-flight fetch/valuation cleanly. */}
         {(busy || progress) && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 12, color: t("ui.text.secondary") }}>{progress || "Working…"}</span>
-            {(busy || pollRef.current) && (
-              <button style={{ ...btn, padding: "4px 10px", borderColor: t("ui.warning"), color: t("ui.warning") }}
-                      onClick={cancel}>Cancel</button>
-            )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span aria-live="polite" style={{ fontSize: 12, color: t("ui.text.secondary") }}>{progress || "Working…"}</span>
+              {(busy || pollRef.current) && (
+                <button style={{ ...btn, padding: "4px 10px", borderColor: t("ui.warning"), color: t("ui.warning") }}
+                        onClick={cancel}>Cancel</button>
+              )}
+            </div>
+            <Progress value={jobProg?.valued} max={jobProg?.total} label="ingest progress" />
           </div>
         )}
 
+        {/* P37/UX-05 — after a successful ingest, offer a clear next step ("Done" / "+ Add another") instead
+            of leaving the investigator on a spent form. */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button style={btn} onClick={onClose}>Close</button>
-          <button style={{ ...btn, borderColor: t("node.seed.marker"),
-                           opacity: canIngest ? 1 : 0.5, cursor: canIngest ? "pointer" : "default" }}
-                  disabled={!canIngest} onClick={ingest}>
-            {busy ? "Ingesting…" : "Ingest"}
-          </button>
+          {succeeded ? (
+            <>
+              <button style={btn} onClick={onClose}>Done</button>
+              <button style={{ ...btn, borderColor: t("node.seed.marker") }} onClick={addAnother}>+ Add another</button>
+            </>
+          ) : (
+            <>
+              <button style={btn} onClick={onClose}>Close</button>
+              <button style={{ ...btn, borderColor: t("node.seed.marker"),
+                               opacity: canIngest ? 1 : 0.5, cursor: canIngest ? "pointer" : "default" }}
+                      disabled={!canIngest} onClick={ingest}>
+                {busy ? "Ingesting…" : "Ingest"}
+              </button>
+            </>
+          )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -57,11 +57,18 @@ class ArkAddressPlan:
 
 
 @dataclass
+class ArkRiskDetail:
+    signal: str          # per-category key, e.g. 'mixer','hacker','sanctions' (the '_score' suffix stripped)
+    score: float         # the category's numeric score (same 0-100 scale as the headline)
+
+
+@dataclass
 class ArkRisk:
     score: float | None
     score_scale: str
     category: str | None
     rationale: str | None
+    details: list[ArkRiskDetail] = field(default_factory=list)  # FN-15: the per-category breakdown, structured
 
 
 def entity_key(e: ArkEntity) -> str:
@@ -128,6 +135,13 @@ def adapt_risk(payload: dict) -> ArkRisk | None:
         parts.append("; ".join(extras))
     rationale = " | ".join(parts) or None
 
+    # FN-15: the same per-category scores, promoted to structured sub-signals (each becomes a first-class
+    # `risk_detail` row). Parity with the rationale breakdown: a zero/absent category is omitted (truthy
+    # numeric only). The rationale summary is KEPT alongside (back-compat) — the rows are the queryable form.
+    details = [ArkRiskDetail(signal=f[:-6], score=float(payload[f]))
+               for f in RISK_CATEGORY_FIELDS
+               if isinstance(payload.get(f), (int, float)) and payload.get(f)]
+
     return ArkRisk(
         score=float(max_score) if isinstance(max_score, (int, float)) else None,
-        score_scale="0-100", category=greatest, rationale=rationale)
+        score_scale="0-100", category=greatest, rationale=rationale, details=details)

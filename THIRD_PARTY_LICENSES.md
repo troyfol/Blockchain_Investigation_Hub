@@ -5,9 +5,9 @@ records the licenses of the third-party dependencies and **why the project licen
 copyleft claim is accurate and nothing GPL ships under a misleading permissive label.
 
 > Regenerate the Python side with `python -m piplicenses --format=markdown --order=license`; the frontend
-> side with the node tally in `PROGRESS.md` (P10). Versions below are the v1.2.0 build set — the
-> dependency set is unchanged since v1.0.0 (R6/R6.1 added no runtime dependency); exact pins live in
-> `requirements.lock` (SEC-14).
+> side with the node tally in `PROGRESS.md` (P10). Versions below are the v1.3.0 build set — the
+> dependency set is unchanged since v1.0.0 (the R6/R6.1 remediation and the v1.3.0 P1–P40 upgrade cycle
+> added no runtime dependency); exact pins live in `requirements.lock` (SEC-14).
 
 ## Why GPL-3.0 (not MIT)
 

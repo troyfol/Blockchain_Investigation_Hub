@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { GraphNode } from "./Graph";
 import { t } from "./theme/theme";
+import Modal from "./Modal";
 
 // Aggregated investigator input (from /api/investigator/notes) — every annotation, label override, and
 // tag grouped by its target, with a jump-to node id where the target is a graph node.
@@ -86,14 +87,15 @@ export default function FindingsPanel({ onClose, refreshKey, selected, onFocus, 
   const selRef = nodeToRef(selected);
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50,
-      background: `${t("canvas.background")}d9`,  /* the catalog bg at ~85% alpha — a tokenized scrim */
-      display: "flex", justifyContent: "center", alignItems: "center" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ ...surface, width: "min(1000px, 94vw)",
+    <Modal onClose={onClose} labelledBy="findings-title"
+      backdropStyle={{ position: "fixed", inset: 0, zIndex: 50,
+        background: `${t("canvas.background")}d9`,  /* the catalog bg at ~85% alpha — a tokenized scrim */
+        display: "flex", justifyContent: "center", alignItems: "center" }}
+      containerStyle={{ ...surface, width: "min(1000px, 94vw)",
         height: "min(86vh, 900px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "10px 14px", borderBottom: `1px solid ${t("ui.border")}`, background: t("ui.panel.bg") }}>
-          <strong>Findings &amp; Notes</strong>
+          <strong id="findings-title">Findings &amp; Notes</strong>
           <button onClick={onClose} style={btn}>✕ Close</button>
         </div>
         {err && <div style={{ padding: "4px 14px", color: t("ui.error"), fontSize: 12 }}>{err}</div>}
@@ -236,7 +238,6 @@ export default function FindingsPanel({ onClose, refreshKey, selected, onFocus, 
         <div style={{ padding: "6px 14px", borderTop: `1px solid ${t("ui.border")}`, color: t("ui.muted"), fontSize: 11 }}>
           Findings + notes are durable claims (never facts) and flow into the report's Findings section + notes appendix.
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

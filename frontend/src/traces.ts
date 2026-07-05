@@ -26,6 +26,11 @@ export function createTrace(name: string, description?: string | null): Promise<
   return postJson("/api/trace", { name, description: description ?? null }) as Promise<{ trace_id: string }>;
 }
 
+// v1.3.1 — soft-delete (retract) a WHOLE trace: append-only, the trace drops out of the list/graph/report.
+export function retractTrace(traceId: string, reason: string): Promise<{ ok: boolean; retraction_id: string }> {
+  return postJson(`/api/trace/${traceId}/retract`, { reason }) as Promise<{ ok: boolean; retraction_id: string }>;
+}
+
 export function addTraceTransfer(traceId: string, transferId: string): Promise<Record<string, unknown>> {
   return postJson(`/api/trace/${traceId}/transfer`, { transfer_id: transferId });
 }

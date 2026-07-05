@@ -37,7 +37,8 @@ MIGRATIONS_DIR = resource_path("backend/app/migrations")
 # trace-retraction tables in 0011 -> version 7. FN-17 manual cross-chain bridge link adds
 # trace_bridge_link in 0012 -> version 8. FN-15 per-sub-signal risk detail adds risk_detail in 0013 -> version 9.
 # P27/FN-19 in-DB append-only audit_baseline anchor adds 0014 -> version 10.
-CURRENT_SCHEMA_VERSION = 10
+# v1.3.1 whole-trace retraction (soft-delete of a trace) adds trace_retraction in 0015 -> version 11.
+CURRENT_SCHEMA_VERSION = 11
 
 
 class SchemaTooNewError(Exception):

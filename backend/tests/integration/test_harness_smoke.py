@@ -55,7 +55,7 @@ def _default_env(tmp_path, monkeypatch):
 def test_fresh_db_migrates_full_schema(tmp_path):
     db_path = tmp_path / "case.db"
     applied = apply_migrations(db_path)
-    assert applied == 14  # 0001..0014 (0014 = P27/FN-19 audit_baseline anchor)
+    assert applied == 15  # 0001..0015 (0015 = v1.3.1 whole-trace retraction / soft-delete)
     # No case initialized yet -> no case_meta row -> schema_version reads 0.
     assert read_schema_version(db_path) == 0
 

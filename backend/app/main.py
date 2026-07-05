@@ -967,7 +967,10 @@ def api_traces(conn=Depends(get_case_conn)) -> dict:
 
     custom = current_labels(conn, "trace")
     out = []
-    for t in conn.execute("SELECT id, name, description FROM trace ORDER BY created_at, id").fetchall():
+    for t in conn.execute(
+            "SELECT id, name, description FROM trace t "
+            "WHERE NOT EXISTS (SELECT 1 FROM trace_retraction r WHERE r.trace_id=t.id) "  # v1.3.1: hide soft-deleted traces
+            "ORDER BY t.created_at, t.id").fetchall():
         # FN-04: counts reflect the EFFECTIVE trace — retracted edges/links are excluded (their rows persist).
         btc = conn.execute(
             "SELECT COUNT(*) FROM trace_btc_link l WHERE l.trace_id=? "
@@ -1181,6 +1184,23 @@ def api_retract_trace_btc_link(trace_id: str, trace_btc_link_id: str, body: Retr
         raise HTTPException(status_code=400, detail="a retraction needs a non-empty reason")
     try:
         retraction_id = retract_trace_btc_link(conn, trace_btc_link_id=trace_btc_link_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, "retraction_id": retraction_id}
+
+
+@app.post("/api/trace/{trace_id}/retract")
+def api_retract_trace(trace_id: str, body: RetractBody, conn=Depends(get_case_conn)) -> dict:
+    """v1.3.1: retract (soft-delete) a WHOLE trace — append-only. The trace + its edges persist in-DB, but the
+    trace drops out of the trace list / graph overlay / report / activity. A reason is required (mirrors the
+    edge/link retraction); idempotent. 404 for an unknown trace."""
+    from .services.tracing import retract_trace
+
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="a retraction needs a non-empty reason")
+    try:
+        retraction_id = retract_trace(conn, trace_id=trace_id, reason=reason)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"ok": True, "retraction_id": retraction_id}

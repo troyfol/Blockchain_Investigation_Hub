@@ -71,6 +71,17 @@ class TraceBtcLinkRetraction(BaseModel):
     source: str = "investigator"
 
 
+class TraceRetraction(BaseModel):
+    """Append-only retraction of a WHOLE trace (v1.3.1 soft-delete). The ``trace`` row and its edges/links
+    are never deleted — this row withdraws the entire path from every effective view (list / graph overlay /
+    report / activity). A Family-C investigator construction; mirrors the edge/link retractions one level up."""
+
+    id: str = Field(default_factory=_new_id)
+    trace_id: str
+    reason: str
+    source: str = "investigator"
+
+
 class TraceBridgeLink(BaseModel):
     """A manual CROSS-CHAIN bridge crossing inside a trace (FN-17): the investigator asserts that an outflow
     movement on chain A corresponds to an inflow movement on chain B. A ``basis='investigator'`` CLAIM, never

@@ -635,8 +635,39 @@ function TraceBuilder({ traces, action, onCreateTrace, onAddTransferToTrace, onF
   );
 }
 
-function TraceList({ traces, onSaveTraceLabel }: {
+// v1.3.1 — soft-delete (retract) a WHOLE trace: an inline confirm + optional reason (no native prompt, P32).
+// The trace is WITHDRAWN (append-only) — its row + edges persist for the audit trail; it just leaves the case
+// view (list, graph overlay, report, activity). A default reason keeps the click-through fast.
+function TraceDeleteControl({ onDelete }: { onDelete: (reason: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const field: React.CSSProperties = { background: t("ui.panel.bg"), color: t("ui.text"),
+    border: `1px solid ${t("ui.border")}`, borderRadius: 3, padding: "2px 8px", fontSize: em(11) };
+  const danger: React.CSSProperties = { ...field, color: t("ui.error"), borderColor: t("ui.error"), cursor: "pointer" };
+  if (!open) {
+    return <button style={danger} onClick={() => { setReason(""); setOpen(true); }}>🗑 Delete trace</button>;
+  }
+  const confirm = () => { onDelete(reason.trim() || "removed by investigator"); setOpen(false); };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ color: t("ui.muted"), fontSize: em(10), lineHeight: 1.4 }}>
+        Delete this trace? It is withdrawn from the case — append-only, so the record is kept, not destroyed.
+      </div>
+      <input autoFocus value={reason} placeholder="reason (optional)…"
+             onChange={(e) => setReason(e.target.value)}
+             onKeyDown={(e) => { if (e.key === "Enter") confirm(); else if (e.key === "Escape") setOpen(false); }}
+             style={{ ...field, width: "100%", boxSizing: "border-box" }} />
+      <div style={{ display: "flex", gap: 4 }}>
+        <button style={danger} onClick={confirm}>Confirm delete</button>
+        <button style={{ ...field, color: t("ui.muted"), cursor: "pointer" }} onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function TraceList({ traces, onSaveTraceLabel, onRetractTrace }: {
   traces: TraceInfo[]; onSaveTraceLabel: (traceId: string, label: string) => void;
+  onRetractTrace?: (traceId: string, reason: string) => void;
 }) {
   return (
     <>
@@ -652,6 +683,11 @@ function TraceList({ traces, onSaveTraceLabel }: {
           </div>
           <LabelEditor initial={tr.name} placeholder="trace label"
             onSave={(v) => onSaveTraceLabel(tr.id, v)} />
+          {onRetractTrace && (
+            <div style={{ marginTop: 4 }}>
+              <TraceDeleteControl onDelete={(reason) => onRetractTrace(tr.id, reason)} />
+            </div>
+          )}
         </div>
       ))}
     </>
@@ -899,7 +935,7 @@ function EdgeView({ edge, nodesById, target, annotations, onSaveLabel, onAddAnno
 
 export default function SidePanel({ node, edge = null, claims, summary, traces = [], annotations = [],
                                     nodesById = {}, onAddAnnotation, onEditAnnotation, onDeleteAnnotation,
-                                    onSaveLabel, onSaveTraceLabel, onCreateTrace, onAddTransferToTrace,
+                                    onSaveLabel, onSaveTraceLabel, onRetractTrace, onCreateTrace, onAddTransferToTrace,
                                     onFifoTx, onAddManualLink, bridgePins, onPinBridge, onClearBridge,
                                     onCreateBridge, onFocus, fontScale = 1, renameToken }: {
   node: GraphNode | null;
@@ -914,6 +950,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
   onDeleteAnnotation?: (id: string) => void;
   onSaveLabel?: (ttype: string, tid: string, label: string) => void;
   onSaveTraceLabel?: (traceId: string, label: string) => void;
+  onRetractTrace?: (traceId: string, reason: string) => void;
   onCreateTrace?: (name: string) => void;
   onAddTransferToTrace?: (traceId: string, transferId: string) => void;
   onFifoTx?: (traceId: string, txId: string) => void;
@@ -952,7 +989,7 @@ export default function SidePanel({ node, edge = null, claims, summary, traces =
   // The Traces area (rename existing paths + build/populate new ones), shown regardless of selection.
   const traceArea = (
     <>
-      {traces.length > 0 && onSaveTraceLabel && <TraceList traces={traces} onSaveTraceLabel={onSaveTraceLabel} />}
+      {traces.length > 0 && onSaveTraceLabel && <TraceList traces={traces} onSaveTraceLabel={onSaveTraceLabel} onRetractTrace={onRetractTrace} />}
       {onCreateTrace && onAddTransferToTrace && onFifoTx && (
         <TraceBuilder traces={traces} action={traceAction} onCreateTrace={onCreateTrace}
           onAddTransferToTrace={onAddTransferToTrace} onFifoTx={onFifoTx} onAddManualLink={onAddManualLink}

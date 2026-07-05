@@ -33,6 +33,7 @@ from ..models import (
     TraceBridgeLink,
     TraceBtcLink,
     TraceBtcLinkRetraction,
+    TraceRetraction,
     TraceTransfer,
     TraceTransferRetraction,
     Transaction,
@@ -661,6 +662,15 @@ def insert_trace_btc_link_retraction(conn, r: TraceBtcLinkRetraction, now: str |
         "INSERT INTO trace_btc_link_retraction (id, trace_btc_link_id, reason, source, created_at) "
         "VALUES (?,?,?,?,?)",
         (r.id, r.trace_btc_link_id, r.reason, r.source, now or utc_now_iso()),
+    )
+    return r.id
+
+
+def insert_trace_retraction(conn, r: TraceRetraction, now: str | None = None) -> str:
+    # v1.3.1: append-only withdrawal of a WHOLE trace (the trace + its edges are never deleted). Family C.
+    conn.execute(
+        "INSERT INTO trace_retraction (id, trace_id, reason, source, created_at) VALUES (?,?,?,?,?)",
+        (r.id, r.trace_id, r.reason, r.source, now or utc_now_iso()),
     )
     return r.id
 

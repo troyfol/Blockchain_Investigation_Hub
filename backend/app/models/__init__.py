@@ -21,6 +21,7 @@ from .investigator import (
     TraceBridgeLink,
     TraceBtcLink,
     TraceBtcLinkRetraction,
+    TraceRetraction,
     TraceTransfer,
     TraceTransferRetraction,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "TraceBridgeLink",
     "TraceTransferRetraction",
     "TraceBtcLinkRetraction",
+    "TraceRetraction",
     "Finding",
     "FindingRef",
     "Annotation",

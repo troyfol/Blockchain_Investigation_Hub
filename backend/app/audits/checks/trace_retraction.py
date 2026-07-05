@@ -1,8 +1,8 @@
 """Trace-retraction append-only audit (P9 / FN-04).
 
-A trace edge/link is RETRACTED, never deleted — the retraction is append-only investigator history. This
-CROSS-RUN check baselines the two trace-retraction tables and fails if a baselined retraction row
-disappears (a deletion — an attempt to silently un-retract) or is rewritten. Adding more retractions is
+A trace edge/link — and, since v1.3.1, a WHOLE trace — is RETRACTED, never deleted; the retraction is
+append-only investigator history. This CROSS-RUN check baselines the trace-retraction tables and fails if a
+baselined retraction row disappears (a deletion — an attempt to silently un-retract) or is rewritten. Adding more retractions is
 normal append-only growth. It mirrors ``append-only-claims`` (immutability.py) and reuses its schema-aware
 baseline helpers, so a forward-only migration that touches these tables re-baselines loudly instead of
 looking like tampering.
@@ -22,13 +22,20 @@ from .immutability import (
 )
 
 RETRACTION_BASELINE = "trace-retraction-append-only"
-RETRACTION_TABLES = ("trace_transfer_retraction", "trace_btc_link_retraction")
+RETRACTION_TABLES = ("trace_transfer_retraction", "trace_btc_link_retraction", "trace_retraction")
 
 
 def _retraction_snapshot(conn) -> dict[str, dict[str, str]]:
-    """Map ``{table -> {retraction_id -> row_hash}}`` over every trace-retraction row."""
+    """Map ``{table -> {retraction_id -> row_hash}}`` over every trace-retraction row. A retraction table
+    added by a LATER migration (e.g. ``trace_retraction``, v1.3.1) is simply absent on an older-schema DB —
+    the audit runs against the raw extracted DB during import/verify BEFORE it forward-migrates, so skip a
+    table that does not exist yet (no rows to protect; the schema-change verdict handles the bump on migrate)."""
+    existing = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     snap: dict[str, dict[str, str]] = {}
     for table in RETRACTION_TABLES:
+        if table not in existing:
+            continue
         rows = conn.execute(f"SELECT * FROM {table}").fetchall()
         snap[table] = {r["id"]: _hash_row(r) for r in rows}
     return snap
@@ -65,7 +72,7 @@ def check_trace_retraction_append_only(ctx: AuditContext) -> AuditResult:
         base = baseline.get(table, {})
         if isinstance(base, list):  # tolerate a legacy id-only baseline (deletion-only until upgraded)
             base = {rid: None for rid in base}
-        cur = current[table]
+        cur = current.get(table, {})   # {} when the table is absent on an older-schema DB (see _retraction_snapshot)
         for rid, old_hash in base.items():
             cur_hash = cur.get(rid)
             if cur_hash is None:

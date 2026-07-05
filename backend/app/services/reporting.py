@@ -53,7 +53,11 @@ def _collect_traces(conn) -> list[dict]:
     # never appears in the report (the row persists in-DB; it is just no longer part of the trace).
     custom = current_labels(conn, "trace")
     traces = []
-    for t in conn.execute("SELECT id, name, description FROM trace ORDER BY created_at, id").fetchall():
+    # v1.3.1: a soft-deleted (retracted) trace is withdrawn from the report just like a retracted edge.
+    for t in conn.execute(
+            "SELECT id, name, description FROM trace t "
+            "WHERE NOT EXISTS (SELECT 1 FROM trace_retraction r WHERE r.trace_id=t.id) "
+            "ORDER BY t.created_at, t.id").fetchall():
         links = trace_btc_links(conn, t["id"])
         transfers = trace_transfers(conn, t["id"])
         bridges = trace_bridge_links(conn, t["id"])  # FN-17: cross-chain investigator claims

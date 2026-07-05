@@ -25,6 +25,7 @@ from ..models import (
     TraceBridgeLink,
     TraceBtcLink,
     TraceBtcLinkRetraction,
+    TraceRetraction,
     TraceTransfer,
     TraceTransferRetraction,
 )
@@ -326,3 +327,16 @@ def retract_trace_btc_link(conn, *, trace_btc_link_id: str, reason: str, now: st
         return existing[0]
     return repo.insert_trace_btc_link_retraction(
         conn, TraceBtcLinkRetraction(trace_btc_link_id=trace_btc_link_id, reason=reason), now=now)
+
+
+def retract_trace(conn, *, trace_id: str, reason: str, now: str | None = None) -> str:
+    """Retract a WHOLE trace (v1.3.1 soft-delete): append a retraction row so the trace drops out of every
+    effective view (list / graph overlay / report / activity) WITHOUT deleting the trace or its edges
+    (append-only investigator history). Idempotent — a second retract of the same trace returns the existing
+    retraction id (no duplicate). Returns the retraction id."""
+    if conn.execute("SELECT 1 FROM trace WHERE id=?", (trace_id,)).fetchone() is None:
+        raise ValueError(f"trace {trace_id!r} not found")
+    existing = conn.execute("SELECT id FROM trace_retraction WHERE trace_id=?", (trace_id,)).fetchone()
+    if existing is not None:
+        return existing[0]
+    return repo.insert_trace_retraction(conn, TraceRetraction(trace_id=trace_id, reason=reason), now=now)

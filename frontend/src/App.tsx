@@ -7,7 +7,7 @@ import CasePicker from "./CasePicker";
 import DenomPanel from "./DenomPanel";
 import ClusteringPanel from "./ClusteringPanel";
 import { checkIntel, intelSummary } from "./intel";
-import { addBridgeLink, addTraceLink, addTraceTransfer, createTrace, fifoTrace,
+import { addBridgeLink, addTraceLink, addTraceTransfer, createTrace, fifoTrace, retractTrace,
   type BridgeEndpoint } from "./traces";
 import { getActiveJob, jobProgressLine } from "./jobs";
 import Toast from "./Toast";
@@ -428,6 +428,10 @@ export default function App() {
   const handleCreateTrace = useCallback((name: string) => {
     createTrace(name).then(() => loadTraces()).catch((e) => setActionError(String(e)));
   }, [loadTraces]);
+  // v1.3.1: soft-delete (retract) a WHOLE trace — refresh the list + view so it disappears everywhere.
+  const handleRetractTrace = useCallback((traceId: string, reason: string) => {
+    retractTrace(traceId, reason).then(() => { loadTraces(); loadView(); }).catch((e) => setActionError(String(e)));
+  }, [loadTraces, loadView]);
   const handleAddTransferToTrace = useCallback((traceId: string, transferId: string) => {
     addTraceTransfer(traceId, transferId).then(() => { loadTraces(); loadView(); }).catch((e) => setActionError(String(e)));
   }, [loadTraces, loadView]);
@@ -781,6 +785,7 @@ export default function App() {
                    annotations={annotations} nodesById={nodesById} onAddAnnotation={handleAddAnnotation}
                    onEditAnnotation={handleEditAnnotation} onDeleteAnnotation={handleDeleteAnnotation}
                    onSaveLabel={handleSaveLabel} onSaveTraceLabel={handleSaveTraceLabel}
+                   onRetractTrace={handleRetractTrace}
                    onCreateTrace={handleCreateTrace} onAddTransferToTrace={handleAddTransferToTrace}
                    onFifoTx={handleFifoTx} onAddManualLink={handleAddManualLink}
                    bridgePins={bridgePins} onPinBridge={handlePinBridge} onClearBridge={handleClearBridge}

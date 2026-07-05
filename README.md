@@ -306,7 +306,7 @@ choices:
 ## 5. Data model (schema)
 
 SQLite, created by forward-only `yoyo` migrations under `backend/app/migrations/` (`schema_version` in
-`case_meta`; currently **v10**, migrations `0001`–`0014`). Canonical Pydantic shapes in
+`case_meta`; currently **v11**, migrations `0001`–`0015`). Canonical Pydantic shapes in
 `backend/app/models/`. Repository (idempotent upserts + append-only inserts + final-row freeze):
 `backend/app/db/repository.py`.
 
@@ -612,7 +612,7 @@ backend/app/
   runtime.py               frozen-runtime config (P7): TLS via bundled certifi + OS keyring backend select
   db/                      connection (WAL + FK pragmas), yoyo migration runner (closes its own handle),
                            repository, shared-cache
-  migrations/              0001..0014 raw-SQL forward-only migrations
+  migrations/              0001..0015 raw-SQL forward-only migrations
   models/                  canonical Pydantic shapes (Family A/B/C + provenance)
   connectors/              base.py (+ etherscan/esplora/defillama/chainalysis/bitquery/arkham/misttrack/oklink),
                            imports/ (base/arkham/graphsense/ofac), registry.py (paid gating)

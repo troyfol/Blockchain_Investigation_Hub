@@ -9,8 +9,11 @@ retract of the same edge is a no-op. All invariant audits (incl. the new retract
 
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 from backend.app.audits.runner import run_audits
 from backend.app.db import repository as repo
+from backend.app.main import app, get_case_db_path
 from backend.app.models import TraceBtcLink
 from backend.app.services.reporting import _collect_traces
 from backend.app.services.tracing import (
@@ -85,3 +88,58 @@ def test_retract_unknown_edge_raises(tmp_path):
         raise AssertionError("expected ValueError for an unknown trace_transfer")
     except ValueError:
         pass
+
+
+def test_retract_whole_trace_soft_deletes_and_keeps_history(tmp_path):
+    """v1.3.1 — retracting a WHOLE trace withdraws it from the effective views (report / list) while the
+    trace row + its edges PERSIST (append-only). Idempotent; every audit (incl. trace-retraction-append-only)
+    still holds."""
+    from backend.app.services.tracing import retract_trace
+
+    conn, db = new_case(tmp_path, title="Whole")
+    seed_evm_address(conn, "0x" + "ef" * 20)
+    transfer_id = conn.execute("SELECT id FROM transfer").fetchone()["id"]
+    trace_id = create_trace(conn, name="doomed path")
+    add_trace_transfer(conn, trace_id=trace_id, transfer_id=transfer_id)
+    assert len(_collect_traces(conn)) == 1  # the report lists the trace
+
+    rid = retract_trace(conn, trace_id=trace_id, reason="built by mistake")
+    # withdrawn from the report/list, but the trace + its edge + the retraction ALL persist (nothing deleted).
+    assert _collect_traces(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM trace").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM trace_transfer").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM trace_retraction").fetchone()[0] == 1
+
+    # idempotent — a second retract of the same trace returns the same id (no duplicate row).
+    assert retract_trace(conn, trace_id=trace_id, reason="again") == rid
+    assert conn.execute("SELECT COUNT(*) FROM trace_retraction").fetchone()[0] == 1
+    assert all(r.passed for r in run_audits(db_path=str(db)))
+
+
+def test_retract_unknown_trace_raises(tmp_path):
+    from backend.app.services.tracing import retract_trace
+
+    conn, _ = new_case(tmp_path, title="Whole")
+    try:
+        retract_trace(conn, trace_id="does-not-exist", reason="x")
+        raise AssertionError("expected ValueError for an unknown trace")
+    except ValueError:
+        pass
+
+
+def test_retract_trace_endpoint(tmp_path):
+    """v1.3.1 — POST /api/trace/{id}/retract: soft-deletes (the trace leaves /api/traces), requires a reason
+    (400), and 404s an unknown trace."""
+    conn, db = new_case(tmp_path, title="ep")
+    trace_id = create_trace(conn, name="to remove")
+    app.dependency_overrides[get_case_db_path] = lambda: str(db)
+    try:
+        c = TestClient(app)
+        assert len(c.get("/api/traces").json()["traces"]) == 1
+        assert c.post(f"/api/trace/{trace_id}/retract", json={"reason": "  "}).status_code == 400  # reason required
+        assert c.post("/api/trace/does-not-exist/retract", json={"reason": "x"}).status_code == 404  # unknown
+        r = c.post(f"/api/trace/{trace_id}/retract", json={"reason": "built by mistake"})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert c.get("/api/traces").json()["traces"] == []  # gone from the list after soft-delete
+    finally:
+        app.dependency_overrides.clear()

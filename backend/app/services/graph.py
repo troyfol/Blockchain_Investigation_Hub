@@ -709,7 +709,8 @@ def build_graph(conn, *, aggregate: bool = True, focus_incident: str | None = No
     _label_dy = [-10, 12, -20, 22]
     for n, l in enumerate(conn.execute(
             "SELECT l.id, l.trace_id, l.source_output_id, l.dest_output_id, l.basis FROM trace_btc_link l "
-            "WHERE NOT EXISTS (SELECT 1 FROM trace_btc_link_retraction r WHERE r.trace_btc_link_id=l.id)"
+            "WHERE NOT EXISTS (SELECT 1 FROM trace_btc_link_retraction r WHERE r.trace_btc_link_id=l.id) "
+            "AND NOT EXISTS (SELECT 1 FROM trace_retraction tr WHERE tr.trace_id=l.trace_id)"  # v1.3.1: hide soft-deleted trace
             ).fetchall()):
         edge = {"id": f"tr:{l['id']}", "source": endpoint(out_addr.get(l["source_output_id"])),
                 "target": endpoint(out_addr.get(l["dest_output_id"])), "kind": "trace",

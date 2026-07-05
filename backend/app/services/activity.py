@@ -50,7 +50,10 @@ def case_activity(conn) -> list[dict]:
                              "source_query", r["id"], detail=_clip(r["endpoint"])))
 
     # --- investigator constructions (Family C) — each a deliberate, low-volume action -------------------
-    for r in conn.execute("SELECT id, name, created_at FROM trace").fetchall():
+    # v1.3.1: a soft-deleted (retracted) trace drops out of the timeline like any withdrawn construction.
+    for r in conn.execute(
+            "SELECT id, name, created_at FROM trace t "
+            "WHERE NOT EXISTS (SELECT 1 FROM trace_retraction rr WHERE rr.trace_id=t.id)").fetchall():
         events.append(_event(r["created_at"], "trace", f"Trace created: {r['name']}", "trace", r["id"]))
 
     for r in conn.execute("SELECT id, statement, created_at FROM finding").fetchall():

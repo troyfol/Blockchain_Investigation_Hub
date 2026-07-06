@@ -57,8 +57,13 @@ Thumbs.db
 
 # Claude Code / agent-local config (carries local paths + permissions — never ship)
 .claude/
-# The build contract is kept LOCAL only (not published) — untracked + ignored so pushes never include it.
+# Two build-workflow files stay at the repo ROOT (both gitignored so pushes never include them): CLAUDE.md is
+# auto-loaded by the harness as the project contract, and PROGRESS.md (the build journal) is referenced
+# throughout the PUBLISHED build docs (docs/phases/*, roadmap, BUILD_INDEX, …) — moving it would strand those.
 CLAUDE.md
-# The build journal is kept LOCAL only too — a large internal dev log, not useful to a forker, but still
-# updated locally per CLAUDE.md §5. Untracked + ignored so pushes never include it.
 PROGRESS.md
+# ALL OTHER non-published internal docs are consolidated + ignored here, so a `git add -A` can never leak them
+# (they were previously untracked-but-not-ignored — a real leak risk): the upgrade/ + review/ dev logs,
+# UPGRADE_PROMPT.md, and the private QUICKSTART.md tutorial. Published docs (README,
+# docs/review/RELEASE_NOTES_*, docs/validation/*, the phase/build docs) stay tracked.
+docs/internal/
